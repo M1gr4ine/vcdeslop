@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+HARNESS="${1:-claude}"
+INPUT="$(cat)"
+
+if [ -z "$INPUT" ]; then
+  printf '{}\n'
+  exit 0
+fi
+
+PROMPT="$(printf '%s\n' "$INPUT" | awk '
+  { buf = buf " " $0 }
+  END {
+    if (match(buf, /"(lastUserInput|prompt|user_prompt)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"/)) {
+      s = substr(buf, RSTART, RLENGTH)
+      sub(/^"[^"]*"[[:space:]]*:[[:space:]]*"/, "", s)
+      sub(/"$/, "", s)
+      print s
+    }
+  }
+')"
+
+if [ -z "$PROMPT" ]; then
+  printf '{}\n'
+  exit 0
+fi
+
+REVIEW_ERE='(^|[^0-9A-Za-z_])(code[[:space:]]+review|pr[[:space:]]+review|diff[[:space:]]+review|(vc)?deslop|(review|audit)([^0-9A-Za-z_].{0,36})?[^0-9A-Za-z_](this|my|the|current|branch|pr|diff|commit|changes?|code|maintainability|project|repo|repository))([^0-9A-Za-z_]|$)|代码审查|审查代码|审一下|(^|[^0-9A-Za-z_])review[[:space:]]*一下|(看看|检查|审视).{0,36}(改动|代码|diff|提交|质量|品位)|去[[:space:]]*AI[[:space:]]*味'
+
+if ! printf '%s\n' "$PROMPT" | grep -Eiq "$REVIEW_ERE"; then
+  printf '{}\n'
+  exit 0
+fi
+
+REMINDER='[vcdeslop auto-trigger] Review/cleanup intent detected. Follow the `vcdeslop` skill protocol:\n1. If python/python3 is available, run `python <vcdeslop_skill_dir>/scripts/preflight_scan.py --path . --mode diff`; otherwise inspect repo linters + raw git diff directly.\n2. Delegate review to a fresh isolated (`spawn`, never `fork`) subagent running on the EXACT SAME model (`inherit`, never `haiku`/`flash`/`flash_lite`/`mini`/`Explore`).\n3. Enforce the 4 Hard Redlines (Single-function Cognitive Complexity <= 15; Zero Boolean Traps & <= 4 positional params; Zero duplicate blocks; Zero circular or cross-layer/private imports; oversized files > 400 lines are advisory WARNING only) plus Cursor deslop, tombstone dead-code reaping, and mental mutation audit.'
+
+if [ "$HARNESS" = "antigravity" ]; then
+  printf '{"injectSteps":[{"systemMessage":{"systemMessage":"%s"}}]}\n' "$REMINDER"
+else
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$REMINDER"
+fi

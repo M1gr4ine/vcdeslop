@@ -1,0 +1,3 @@
+## Code Taste & Automatic Review Gate
+- Keep new/edited code clean: Cognitive Complexity <= 15 (file > 400 lines is advisory warning only), zero Boolean flag parameters (except trivial `setXxx(bool)`), positional params <= 4, zero duplicate blocks, zero circular or cross-layer/private imports, no swallowed catches or `any` bypasses.
+- **Auto-Trigger Review**: Whenever asked to review code, inspect a PR/branch/diff, or audit quality/deslop changes, activate the `vcdeslop` skill, run its `preflight_scan.py`, and delegate the review to an **isolated (`spawn`, never `fork`), same-model (`inherit`) subagent** (never downgrade to `haiku`/`flash`/`flash_lite`/`mini`/`Explore`).
