@@ -91,3 +91,18 @@ powershell -ExecutionPolicy Bypass -File scripts\install.ps1 claude
 
 - 目标目录已存在时默认安全跳过，加 `-Force`（PowerShell）或 `--force`（Bash）自动将原目录备份到 `~/.vcdeslop-backups/<时间戳>/` 后替换（避免插件目录内产生重复副本）；加 `-DryRun` / `--dry-run` 仅预览不落盘；加 `-Uninstall` / `--uninstall` 无损移除已安装的 Skill、Hook 项与标记块。
 - 仓库自身的结构约束、扩展规则与提交前验证清单见 [AGENTS.md](./AGENTS.md)。
+
+---
+
+## 六、鸣谢与参考（Acknowledgments）
+
+本项目的规则设计、架构品位与工程落地汲取了以下开源项目、开放规范与软件工程思想的启发，特此致谢：
+
+- **Cursor `/deslop` 工作流**：将“清除 AI 叙事废话注释、非边界过度防御判空/吞错与局部风格漂移”提炼为独立后置清理工序的实践范式。
+- **Andrej Karpathy & [forrestchang/andrej-karpathy-skills](https://github.com/forrestchang/andrej-karpathy-skills)**：关于 Vibe Coding 常见失控模式的总结，以及 *Simplicity First*（极简优先、拒绝过度设计）与 *Surgical Changes*（手术刀式精准改动）行为准则。
+- **John Ousterhout — *A Philosophy of Software Design***：**深模块（Deep Modules）**理论——用窄而简单的接口隐藏内部复杂度，坚决抵制浅层透传 Wrapper 链与教条式拆小文件。
+- **Carson Gross — [The Grug Brained Developer](https://grugbrain.dev/)**：对抗“复杂度恶魔（Complexity Demon）”的朴素工程直觉与“凌晨三点值班 10 秒看懂”可读性标准。
+- **SonarSource — Cognitive Complexity（G. Ann Campbell）**：相比传统圈复杂度更贴合人类阅读负担的**认知复杂度**度量模型（重点惩罚深层嵌套与控制流打断）。
+- **Shopify Tombstone 模式（[Shopify/tombstone](https://github.com/Shopify/tombstone)）与变异测试（Mutation Testing）**：针对反射/动态路由场景先埋点探针再安全收割死代码的思路，以及用边界/取反/删除变异体识破“高覆盖率假绿 Mock 测试”的方法论。
+- **开放规范与静态门禁生态**：[Agent Skills 开放标准（`agentskills.io`）](https://agentskills.io)，以及各语言生态的优秀工具参考——[rohaquinlop/complexipy](https://github.com/rohaquinlop/complexipy)、[tach-org/tach](https://github.com/tach-org/tach)、[jendrikseipp/vulture](https://github.com/jendrikseipp/vulture)、[boxed/mutmut](https://github.com/boxed/mutmut)、[kucherenko/jscpd](https://github.com/kucherenko/jscpd)、[sverweij/dependency-cruiser](https://github.com/sverweij/dependency-cruiser)、[webpro-nl/knip](https://github.com/webpro-nl/knip)、[Stryker](https://stryker-mutator.io/)、[ArchUnit](https://www.archunit.org/)、[Pitest](https://pitest.org/)、[sqlfluff](https://github.com/sqlfluff/sqlfluff) 与 [golangci-lint](https://github.com/golangci/golangci-lint)。
+
