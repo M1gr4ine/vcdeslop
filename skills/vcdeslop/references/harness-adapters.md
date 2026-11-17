@@ -8,6 +8,7 @@ This skill is portable across all `agentskills.io`-compatible coding agents. To 
 
 1. **Same Model / Reasoning Tier (`inherit`)**: Never delegate code review to a cheaper or faster sub-model (`haiku`, `flash`, `flash_lite`, `mini`, `Explore`). Omit model parameters or set `inherit` so the reviewer runs with the parent session's full intelligence.
 2. **Fresh Context (`spawn`, never `fork`)**: Do NOT copy the implementer's conversation history or persuasive summary into the reviewer. Give the reviewer only the task scope, repo path, preflight output, and rubric links so it independently verifies the actual code and `git diff`.
+3. **Parallel Module Sharding on Large Scopes (`> 8` files or `--mode all`)**: Partition scoped files into 2–3 cohesive directory shards and spawn parallel isolated `inherit` subagents in a single turn (passing only each shard's file list + `preflight_scan.py` excerpt), cutting full-repo review wall time by 60–70% without downgrading model intelligence.
 
 ---
 

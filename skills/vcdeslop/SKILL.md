@@ -61,9 +61,11 @@ Dispatch using your active harness (see [Harness Adapters](./references/harness-
 | **Cursor / Single-Thread** | No subagent API: run preflight, then audit raw diff cold | Same active session model |
 
 Provide the subagent with:
-1. Repository root, target mode (`Review` vs `Clean`), and exact scope (`git diff` base or explicit files).
+1. Repository root, target mode (`Review` vs `CleanAudit`), and exact scope (`git diff` base, explicit files, or assigned module shard).
 2. The full output of `preflight_scan.py` (and any native linter outputs).
-3. Instructions to read and apply [Review Rubric](./references/review-rubric.md) and the matching section(s) of [Language Playbooks](./references/language-playbooks.md) (`Java`, `JS/TS`, `SQL`, `Python`, `Go`, `Rust`, `Shell`).
+3. Instructions to read **only** [Review Rubric](./references/review-rubric.md), the matching section(s) of [Language Playbooks](./references/language-playbooks.md), and scoped files/callers/tests inside `<repo_root>` (never inspect external host configs, IDE/harness docs, or web search).
+4. **Mode-aware output contract**: emit the full Review Report in `Review Mode`, or ONLY the Compact Action List (`file:line + tag -> surgical edit`, omitting tables and code patches) in `CleanAudit`.
+5. **Scope scaling (`<= 8` vs `> 8` files)**: dispatch **1** isolated `inherit` subagent for `<= 8` scoped files; for `> 8` files or `--mode all`, run `preflight_scan.py` first and shard scoped files by directory/module across **2–3 parallel** isolated `inherit` subagents.
 
 ### Step 4: Synthesize Report or Apply Regression-Safe Cleanup
 
@@ -76,7 +78,9 @@ Provide the subagent with:
    - **Lock with tests**: Verify existing tests pass before editing (or write focused behavior checks first).
    - **Deletion-first surgical edits**: Strip obvious comments, dead orphans, abnormal defensive checks, Boolean Traps, deep nesting, clones, and shallow pass-through wrappers—touching only scoped code.
    - **Re-verify**: Re-run `preflight_scan.py` (confirm `0` blockers) and the project's test suite.
-   - **Concise summary**: Report scope cleaned, lines removed/refactored, and verification results in 1–3 crisp sentences.
+   - **Concise summary & Before/After delta**: Report scope cleaned and verification results in 1–3 crisp sentences, plus a descriptive delta line:
+     `Net LOC: ±N (+A / -B) | Max Cognitive Complexity: X -> Y | Blockers: M -> 0`
+     *(Treat `Net LOC` strictly as an observation—never cram control flow into dense one-liners/nested ternaries or skip named Options/DTO types just to chase negative line counts.)*
 
 ## Reference Index
 
