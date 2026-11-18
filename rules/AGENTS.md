@@ -14,3 +14,8 @@
   1. Activate the **`vcdeslop`** skill (`skills/vcdeslop/SKILL.md`).
   2. Run `preflight_scan.py` when Python is available.
   3. Delegate the audit to an **isolated (`spawn`, never `fork`), same-model (`inherit`) subagent**—never downgrade to `haiku`/`flash`/`flash_lite`/`mini`/`Explore`.
+
+## Implementation Flow (Always Active)
+- **Mid-task**: after writing or substantially changing a non-trivial file, run `preflight_scan.py --mode diff` (if Python is available) and fix redline hits immediately.
+- **Code-complete, before commit**: activate `vcdeslop` and spawn an isolated `inherit` reviewer in the same turn as build/test; resolve both results, then commit. Never commit first and review afterwards.
+- **Round closure**: once a review round is accepted (`PASS`, or `CONCERNS` under an agreed exit condition), commit/push/install/release requests do not trigger a new review; re-review only the delta since acceptance, in `Verify` mode.
