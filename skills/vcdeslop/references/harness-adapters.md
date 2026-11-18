@@ -8,7 +8,8 @@ This skill is portable across all `agentskills.io`-compatible coding agents. To 
 
 1. **Same Model / Reasoning Tier (`inherit`)**: Never delegate code review to a cheaper or faster sub-model (`haiku`, `flash`, `flash_lite`, `mini`, `Explore`). Omit model parameters or set `inherit` so the reviewer runs with the parent session's full intelligence.
 2. **Fresh Context (`spawn`, never `fork`)**: Do NOT copy the implementer's conversation history or persuasive summary into the reviewer. Give the reviewer only the task scope, repo path, preflight output, and rubric links so it independently verifies the actual code and `git diff`.
-3. **Parallel Module Sharding on Large Scopes (`> 8` files or `--mode all`)**: Partition scoped files into 2–3 cohesive directory shards and spawn parallel isolated `inherit` subagents in a single turn (passing only each shard's file list + `preflight_scan.py` excerpt), cutting full-repo review wall time by 60–70% without downgrading model intelligence.
+3. **Parallel module sharding**: For diffs, count additions plus deletions. Use one isolated `inherit` reviewer for up to 400 changed lines. For larger diffs, group whole files by directory or module into shards of roughly 400 changed lines each. For `--mode all` (no diff), split module-cohesive shards of roughly 3,000 scoped source lines each; run at most four reviewers concurrently and dispatch remaining shards in waves. In each wave, spawn up to four isolated `inherit` reviewers in a single turn, each with its file list and the full preflight output when available, to reduce review time without downgrading model intelligence.
+4. **Overlap & Verify**: In implementation flows, once production and test files are complete and the Step 3 dispatch gate is satisfied, start the build/tests and spawn the reviewer in the same turn, falling back to serial execution without asynchronous subagents. For fix re-review, use a fresh `inherit` reviewer in `Verify` mode with only the prior reviewer's verbatim findings and the fix diff as evidence ([Review Rubric §3.3](./review-rubric.md#33-verify-report-fix-re-review)).
 
 ---
 
@@ -51,6 +52,8 @@ This skill is portable across all `agentskills.io`-compatible coding agents. To 
 ## 5. Cursor & Single-Thread Agents (Fallback)
 
 If the active environment has no subagent tool (or subagents are disabled by policy):
-1. Run `python <skill_dir>/scripts/preflight_scan.py --path <repo_root> --mode diff` first so objective metrics constrain confirmation bias.
+1. When Python is available, run `python <skill_dir>/scripts/preflight_scan.py --path <repo_root>` with the scope flags resolved in Step 1. Reuse those flags for the final cross-module scan.
 2. Re-read the raw `git diff` and full target files from scratch—explicitly ignoring prior rationalizations in chat history.
 3. Apply all five dimensions of `references/review-rubric.md` line by line using the current session model.
+
+Review and tests cannot overlap on a single-thread harness. For implementation and Clean / Deslop flows (including `CleanAudit`), apply the Step 3 gate and pass suspected scanner false positives through for confirmation. In read-only Review, proceed immediately with the full preflight output when available. Use `Verify` for fix-scoped re-checks (§3.3).

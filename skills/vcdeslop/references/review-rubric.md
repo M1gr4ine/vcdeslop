@@ -23,6 +23,7 @@ CORE RULES:
 4. Output Contract:
    - In `Review` mode: output ONLY the Full Review Report (Section 3.1).
    - In `CleanAudit` (Clean / Deslop audit pass): skip tables, explanations, and code patches, and output ONLY the Compact Action List (Section 3.2).
+   - In `Verify` mode (fix re-review): output ONLY the Verify Report (Section 3.3).
 ```
 
 ---
@@ -155,4 +156,20 @@ When auditing for **Clean / Deslop Mode**, omit scorecards, prose paragraphs, an
 - **[BLOCKER|WARNING] `<TAG>`** `path/to/file.ext:42` — <1-clause defect> -> <exact surgical edit/deletion>
 - **[TOMBSTONE]** `path/to/file.ext:88` — `<symbol>` unreferenced in repo -> delete (or add runtime probe if dynamic)
 - **[MUTANT]** `path/to/test.ext:19` — <surviving mutant / hollow assertion> -> <exact assertion to add>
+```
+
+### 3.3 Verify Report (Fix Re-Review)
+
+Use only the prior reviewer's verbatim findings list and the fix diff as input. Verify each finding in source and disregard implementer claims.
+
+1. Judge every prior finding as `FIXED`, `NOT FIXED`, or `REGRESSED`. Cite the source location and explain any unresolved or worsened issue.
+2. Audit the fix diff against all five dimensions (A–E). Report new findings with their severity, location, and surgical fix.
+3. If the fix diff materially exceeds the scope of the original findings, output `ESCALATE: full review required` and stop. Otherwise use the report below.
+
+```markdown
+- `FIXED` `path/to/file.ext:42` — <original tag>
+- `NOT FIXED` `path/to/file.ext:57` — <original tag> -> <what is still wrong>
+- `REGRESSED` `path/to/file.ext:60` — <original tag> -> <what got worse>
+- **[BLOCKER|WARNING] `<TAG>`** `path/to/file.ext:71` — <new issue in fix diff> -> <surgical edit>
+- **Verdict**: PASS | CONCERNS | BLOCK
 ```

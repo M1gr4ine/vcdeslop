@@ -43,7 +43,14 @@ Useful flags: `--base main`, `--mode staged`, `--mode all`, `--files a.java b.ts
 
 If the target repository already configures native linters or architecture tests, run those targeted checks too (`eslint`, `jscpd`, `dependency-cruiser`, `knip`, `tach`, `complexipy`, `sqlfluff`, or `mvn`/`gradle` ArchUnit checks) so findings reflect real repo gates.
 
+**Mid-task preflight**: After writing or substantially changing a non-trivial file, rerun `preflight_scan.py --mode diff` and fix redline hits immediately.
+
 ### Step 3: Delegate to an Isolated, Same-Model (`inherit`) Subagent
+
+**Reviewer dispatch and verification**
+- **Dispatch gate (edit-bound flows only)**: Applies whenever this flow will edit code — implementation flows and Clean / Deslop mode (including its `CleanAudit` pass). When Python is available, fix preflight blockers before dispatching; any blocker judged a scanner false positive stays unfixed and is passed through for the reviewer to confirm. Read-only Review never waits on this gate: dispatch immediately with the full preflight output. If Python is unavailable, skip the gate. The reviewer confirms findings in source and audits all five dimensions.
+- **Overlap with verification**: Once production code and tests are complete, start the project build/test run and spawn the final reviewer in the same turn. Wait for both results, then address test failures and review findings together. Use serial execution on harnesses without asynchronous subagents.
+- **Fix re-review**: For `Verify`, spawn a fresh `inherit` reviewer with only the prior reviewer's verbatim findings and the fix diff as evidence. Use the [Verify Report](./references/review-rubric.md#33-verify-report-fix-re-review) (§3.3). If the diff materially exceeds those findings, run a full Review (§3.1). The initial Review and CleanAudit payloads are listed below.
 
 > [!IMPORTANT]
 > **Two non-negotiable subagent rules:**
@@ -65,7 +72,8 @@ Provide the subagent with:
 2. The full output of `preflight_scan.py` (and any native linter outputs).
 3. Instructions to read **only** [Review Rubric](./references/review-rubric.md), the matching section(s) of [Language Playbooks](./references/language-playbooks.md), and scoped files/callers/tests inside `<repo_root>` (never inspect external host configs, IDE/harness docs, or web search).
 4. **Mode-aware output contract**: emit the full Review Report in `Review Mode`, or ONLY the Compact Action List (`file:line + tag -> surgical edit`, omitting tables and code patches) in `CleanAudit`.
-5. **Scope scaling (`<= 8` vs `> 8` files)**: dispatch **1** isolated `inherit` subagent for `<= 8` scoped files; for `> 8` files or `--mode all`, run `preflight_scan.py` first and shard scoped files by directory/module across **2–3 parallel** isolated `inherit` subagents.
+5. **Scope scaling by diff size**: Count additions plus deletions. Use one isolated `inherit` reviewer for up to 400 changed lines. For larger diffs, group whole files by directory or module, aiming for 400 changed lines per reviewer with at most four reviewers active at once. Keep an oversized file in one shard. For `--mode all` (no diff), split module-cohesive shards of roughly 3,000 scoped source lines each; run at most four reviewers concurrently and dispatch remaining shards in waves.
+6. **Frozen-module pre-review**: When the overall scope exceeds 15 files, a module qualifies once its call chain and tests are complete and no further edits to it are planned. Spawn a read-only background reviewer for that module while work continues elsewhere. If the module changes later, discard its review and return it to the final review scope. At final review, cover all files without a valid pre-review and the cross-module interfaces; pass pre-review Tombstone findings to the final reviewer as provisional and have it reconfirm them against the final code, since edits in other modules can add or remove callers; also rerun the Tombstone dimension for frozen-module symbols referenced on any added or deleted diff line (deleted lines included) since that pre-review, to catch symbols whose last caller was removed, then rerun `preflight_scan.py` with the same scope flags resolved in Step 1 to check for cross-module duplication and cycles. Never dispatch after a fixed number of files: later edits invalidate findings, unfinished call chains distort dead-code and mutation findings, and separate batches can hide duplicates or cycles.
 
 **Orchestrator discipline (what keeps it double-blind and cheap):**
 - **No leading hints**: pass facts (scope, preflight output), never suspicions ("check why X", "look at installers"). Hypotheses anchor the reviewer and defeat the blind pass.
