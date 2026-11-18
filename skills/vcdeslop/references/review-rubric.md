@@ -50,13 +50,15 @@ Any violation in scoped additions or modifications blocks merge (`Verdict: BLOCK
 
 3. **Newly Added Duplicate Code Blocks = 0 (`新增重复代码块 = 0`)**
    - `REDLINE-DUPLICATION` (`[BLOCKER]`): Zero newly copy-pasted or ~80%-similar logic blocks (>= 10 normalized lines) across files or inside the same file. Search the repository for existing helpers before creating new ones.
+     - *Scanner coverage*: `preflight_scan.py` only catches **exact** clones after whitespace/comment/string normalization. Copy-paste-and-rename clones (different identifiers, same shape) are invisible to it—the reviewer must hunt those by reading.
    - *Balance against Wrong Abstraction*: If two blocks merely look structurally similar today while representing **independently evolving business domains**, do **NOT** merge them by introducing a Boolean Trap monstrosity—either share a pure domain-neutral primitive or keep them cleanly separate.
 
-4. **Module Circular Dependencies = 0 & Zero Cross-Layer / Private Imports (`模块循环依赖 = 0，严禁跨层引用私有文件`)**
+4. **No Import Cycles, Private Imports Across Modules, or Domain Dependencies on Outer Layers (`模块循环依赖 = 0，严禁跨层引用私有文件`)**
    - `REDLINE-CYCLE` (`[BLOCKER]`): Zero circular imports (`A -> B -> ... -> A`) across files, packages, or SQL views.
    - `REDLINE-BOUNDARY` (`[BLOCKER]`):
      - Zero cross-module imports into private/internal files (`/internal/`, `/_internal/`, `/private/`, `/impl/`, or Python cross-package `._module`). Always import from the target module's public facade/entrypoint.
-     - Zero architectural layer bypasses: Presentation (`controller`/`web`/`ui`/`routes`) importing Persistence (`mapper`/`dao`/`repository`) directly; Domain/Core importing Presentation or Infrastructure.
+     - Domain/Core must not import Presentation or Infrastructure.
+   - `ADVISORY-LAYER` (`[WARNING]`) flags Presentation importing Persistence directly. Check the repository’s architecture rules before requiring a service layer.
 
 ---
 
@@ -125,7 +127,7 @@ The reviewer subagent MUST respond using this structure in `Review` mode:
 | 1. Single-Function Cognitive Complexity <= 15 | PASS/FAIL | N | ... |
 | 2. Zero Boolean Traps & Positional Params <= 4 | PASS/FAIL | N | ... |
 | 3. Newly Added Duplicate Code Blocks = 0 | PASS/FAIL | N | ... |
-| 4. Circular Deps = 0 & No Cross-Layer/Private Imports | PASS/FAIL | N | ... |
+| 4. No cycles, private imports across modules, or domain dependencies on outer layers | PASS/FAIL | N | ... |
 
 ## Findings (Ordered by Severity)
 - **[BLOCKER] `<RULE-OR-TASTE-TAG>`** `path/to/File.ext:42` — What is wrong and why it hurts maintainability.

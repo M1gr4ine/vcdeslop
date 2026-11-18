@@ -25,6 +25,7 @@ $Stamp = Get-Date -Format "yyyyMMddHHmmss"
 $BackupRoot = Join-Path $HomeDir ".vcdeslop-backups\$Stamp"
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $Script:UniversalDone = $false
+$CursorRuleHeader = "---`ndescription: VCDeslop code taste & review gate`nalwaysApply: true`n---"
 
 function Write-Log {
     param([string]$Message)
@@ -202,40 +203,65 @@ function ConvertTo-OrderedMap {
 }
 
 function Remove-DeslopHookEntries {
-    param($Entries)
-    return @($Entries | Where-Object {
-        if ($_ -isnot [System.Collections.IDictionary]) { return $true }
-        $Inner = $_["hooks"]
-        if ($null -eq $Inner) { return $true }
-        -not (@($Inner) | Where-Object { $_ -is [System.Collections.IDictionary] -and $_["command"] -match "vcdeslop-hook" })
-    })
+    param($HooksMap)
+    $Changed = $false
+    $Launcher = '(?:powershell(?:\.exe)?\s+(?:-NoProfile\s+-ExecutionPolicy\s+Bypass\s+)?-File\s+)?'
+    $ScriptName = 'vcdeslop-hook(?:\.ps1|\.cmd)?'
+    $PathToken = "(?:`"(?:[^`"]*[/\\])?$ScriptName`"|'(?:[^']*[/\\])?$ScriptName'|(?:[^\s`"';&|]*[/\\])?$ScriptName)"
+    $InstalledCommand = "^\s*$Launcher$PathToken\s+(?:claude|codex|dsh|cursor)\s*$"
+    $Groups = foreach ($Group in $HooksMap["UserPromptSubmit"]) {
+        if ($Group -isnot [System.Collections.IDictionary] -or $Group["hooks"] -isnot [array]) {
+            $Group
+            continue
+        }
+        $Remaining = @($Group["hooks"] | Where-Object {
+            $_ -isnot [System.Collections.IDictionary] -or $_["command"] -notmatch $InstalledCommand
+        })
+        if ($Remaining.Count -eq $Group["hooks"].Count) {
+            $Group
+            continue
+        }
+        $Changed = $true
+        if ($Remaining.Count -gt 0) {
+            $Group["hooks"] = $Remaining
+            $Group
+        }
+    }
+    if ($Changed) {
+        $HooksMap.Remove("UserPromptSubmit")
+        if ($null -ne $Groups) { $HooksMap["UserPromptSubmit"] = @($Groups) }
+    }
+    return $Changed
 }
 
 function Update-HookJson {
     param([string]$Harness, [string]$ConfigDir)
-    $FileMap = @{ claude = "settings.json"; codex = "hooks.json"; dsh = "hooks.json"; cursor = "hooks.json" }
-    $HookPath = Join-Path $ConfigDir $FileMap[$Harness]
+    $FileName = if ($Harness -eq "claude") { "settings.json" } else { "hooks.json" }
+    $HookPath = Join-Path $ConfigDir $FileName
     $Raw = Read-TextSafe -FilePath $HookPath
-    if ($null -eq $Raw -or ($Uninstall -and [string]::IsNullOrWhiteSpace($Raw))) { return }
+    $InstallHook = -not $Uninstall -and $Harness -ne "cursor"
+    if ($null -eq $Raw -or (-not $InstallHook -and [string]::IsNullOrWhiteSpace($Raw))) { return }
     $Data = if ([string]::IsNullOrWhiteSpace($Raw)) { [ordered]@{} } else { ConvertTo-OrderedMap ($Raw | ConvertFrom-Json) }
-    if (-not $Data.Contains("hooks") -or $null -eq $Data["hooks"]) { $Data["hooks"] = [ordered]@{} }
+    if ($null -eq $Data["hooks"]) { $Data["hooks"] = [ordered]@{} }
     $HooksMap = $Data["hooks"]
-    $Existing = if ($HooksMap.Contains("UserPromptSubmit") -and $null -ne $HooksMap["UserPromptSubmit"]) { @($HooksMap["UserPromptSubmit"]) } else { @() }
-    $Filtered = Remove-DeslopHookEntries -Entries $Existing
-    if (-not $Uninstall) {
+    $Changed = Remove-DeslopHookEntries -HooksMap $HooksMap
+    if ($InstallHook) {
         $Cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$HookScript`" $Harness"
-        $Filtered += [ordered]@{ matcher = ""; hooks = @([ordered]@{ type = "command"; command = $Cmd; timeout = 5 }) }
+        $Group = [ordered]@{ matcher = ""; hooks = @([ordered]@{ type = "command"; command = $Cmd; timeout = 5 }) }
+        if ($null -eq $HooksMap["UserPromptSubmit"]) { $HooksMap["UserPromptSubmit"] = @() }
+        $HooksMap["UserPromptSubmit"] += $Group
+    } elseif (-not $Changed) {
+        return
     }
-    if ($Filtered.Count -gt 0) { $HooksMap["UserPromptSubmit"] = @($Filtered) } else { $HooksMap.Remove("UserPromptSubmit") }
     if ($HooksMap.Count -eq 0) { $Data.Remove("hooks") }
-    Write-TextWithBackup -FilePath $HookPath -Content (($Data | ConvertTo-Json -Depth 10) + "`n")
+    Write-TextWithBackup -FilePath $HookPath -Content (($Data | ConvertTo-Json -Depth 100) + "`n")
 }
 
 function Remove-RuleGateBlock {
     param([string]$Harness, [string]$RulePath, [string]$Raw, [string]$MarkerRx)
-    if ([string]::IsNullOrWhiteSpace($Raw)) { return }
+    if ($Raw -notmatch $MarkerRx) { return }
     $Cleaned = ([regex]::Replace($Raw, $MarkerRx, "`n")).Trim()
-    if ($Harness -eq "cursor" -and $Cleaned -replace '---', '' -match '^\s*description:') { $Cleaned = "" }
+    if ($Harness -eq "cursor" -and $Cleaned.Replace("`r`n", "`n") -ceq $CursorRuleHeader) { $Cleaned = "" }
     if ([string]::IsNullOrEmpty($Cleaned)) { Remove-InstalledPath -DestPath $RulePath; return }
     Write-TextWithBackup -FilePath $RulePath -Content ($Cleaned + "`n")
 }
@@ -253,7 +279,7 @@ function Update-RuleGate {
     if ($Raw -match '<!-- VCDESLOP-AUTO-GATE:START -->') {
         $Updated = ([regex]::Replace($Raw, $MarkerRx, "`n$Block")).TrimStart("`r", "`n")
     } elseif ($Harness -eq "cursor" -and [string]::IsNullOrWhiteSpace($Raw)) {
-        $Updated = "---`ndescription: VCDeslop code taste & review gate`nalwaysApply: true`n---`n`n$Block"
+        $Updated = "$CursorRuleHeader`n`n$Block"
     } else {
         $Updated = if ([string]::IsNullOrWhiteSpace($Raw)) { $Block } else { $Raw.TrimEnd() + "`n`n" + $Block }
     }

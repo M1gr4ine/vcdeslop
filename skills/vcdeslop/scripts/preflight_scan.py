@@ -39,11 +39,11 @@ def _summarize_verdict(findings: tuple[Finding, ...]) -> tuple[str, int, int]:
     return "PASS", blockers, warnings
 
 
-def _slop_gate_label(slop: list[Finding]) -> str:
-    """Return scorecard gate label for SLOP-* findings."""
-    if any(f.severity == "BLOCKER" for f in slop):
+def _additional_gate_label(findings: list[Finding]) -> str:
+    """Summarize slop findings and architectural advisories."""
+    if any(f.severity == "BLOCKER" for f in findings):
         return "FAIL"
-    if slop:
+    if findings:
         return "WARN"
     return "CLEAN"
 
@@ -55,8 +55,8 @@ def render_markdown(report: ScanReport) -> str:
     c2 = _count_rules(report.findings, ("REDLINE-BOOL-TRAP", "REDLINE-PARAMS"))
     c3 = _count_rules(report.findings, ("REDLINE-DUPLICATION",))
     c4 = _count_rules(report.findings, ("REDLINE-CYCLE", "REDLINE-BOUNDARY"))
-    slop = [f for f in report.findings if f.rule_id.startswith("SLOP-")]
-    slop_gate = _slop_gate_label(slop)
+    additional = [f for f in report.findings if f.rule_id.startswith(("SLOP-", "ADVISORY-"))]
+    additional_gate = _additional_gate_label(additional)
 
     lines = [
         "# VCDeslop Preflight Report",
@@ -69,8 +69,8 @@ def render_markdown(report: ScanReport) -> str:
         f"| 1. Single-Function Cognitive Complexity <= 15 | {'FAIL' if c1 else 'PASS'} | {c1} |",
         f"| 2. Zero Boolean Traps & Positional Params <= 4 | {'FAIL' if c2 else 'PASS'} | {c2} |",
         f"| 3. Newly Added Duplicate Code Blocks = 0 | {'FAIL' if c3 else 'PASS'} | {c3} |",
-        f"| 4. Circular Deps = 0 & No Cross-Layer/Private Imports | {'FAIL' if c4 else 'PASS'} | {c4} |",
-        f"| + AI Slop / SQL Smells / Advisory Warnings | {slop_gate} | {len(slop)} |",
+        f"| 4. No cycles, private imports across modules, or domain dependencies on outer layers | {'FAIL' if c4 else 'PASS'} | {c4} |",
+        f"| + AI Slop / SQL Smells / Advisory Warnings | {additional_gate} | {len(additional)} |",
         "",
     ]
 

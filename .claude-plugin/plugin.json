@@ -1,7 +1,7 @@
 {
   "name": "vcdeslop",
   "version": "2.0.0",
-  "description": "Cross-agent code review, AI-slop cleanup, and maintainability gate enforcing Cognitive Complexity <= 15, zero Boolean Traps, zero duplicate code blocks, and zero circular or cross-layer imports via an isolated same-model (inherit) subagent.",
+  "description": "Cross-agent code review, AI-slop cleanup, and maintainability gate enforcing Cognitive Complexity <= 15, zero Boolean Traps, zero duplicate code blocks, and zero import cycles and cross-module private imports via an isolated same-model (inherit) subagent.",
   "author": {
     "name": "VCDeslop Contributors"
   }

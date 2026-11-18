@@ -3,7 +3,7 @@ name: vcdeslop-reviewer
 description: >-
   Double-blind code taste and maintainability reviewer enforcing Cursor deslop
   hygiene, Cognitive Complexity <= 15, zero Boolean Traps, zero duplicate code,
-  zero circular/cross-layer imports, tombstone dead-code reaping, and mental
+  zero cycles and cross-module private imports, tombstone dead-code reaping, and mental
   mutation rigor.
 subagent: true
 mainAgent: false

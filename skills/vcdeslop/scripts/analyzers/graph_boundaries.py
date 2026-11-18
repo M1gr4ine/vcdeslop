@@ -5,12 +5,12 @@ from __future__ import annotations
 import ast
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .git_scope import to_rel_posix
 from .lexers import strip_comments_and_strings, strip_comments_only
-from .models import Finding, ScanOptions
+from .models import Finding, ScanOptions, make_finding
 
 _JS_FROM_RE = re.compile(r"""(?:import|export)\s+[\s\S]{0,400}?\bfrom\s+['"]([^'"]+)['"]""")
 _JS_BARE_RE = re.compile(r"""(?:^|\n)\s*import\s+['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\)""")
@@ -34,6 +34,7 @@ class _ImportRef:
     target: Path | None
     raw_spec: str
     line: int
+    eager: bool = True  # False for TYPE_CHECKING / function-local imports: not a load-time cycle edge
 
 
 @dataclass(frozen=True)
@@ -143,19 +144,45 @@ def _extract_py_from_import(src: Path, node: ast.ImportFrom, index: _RepoIndex) 
     return refs
 
 
+def _is_type_checking(test: ast.expr) -> bool:
+    """Recognize conventional typing guards, without treating arbitrary attributes as guards."""
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    return (isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+            and isinstance(test.value, ast.Name) and test.value.id == "typing")
+
+
+def _iter_py_import_nodes(tree: ast.Module) -> list[tuple[ast.Import | ast.ImportFrom, bool]]:
+    """Mark function bodies and the true branch of typing guards as non-eager."""
+    found: list[tuple[ast.Import | ast.ImportFrom, bool]] = []
+    stack: list[tuple[ast.AST, bool]] = [(n, True) for n in tree.body]
+    while stack:
+        node, eager = stack.pop()
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            found.append((node, eager))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            stack.extend((c, False) for c in ast.iter_child_nodes(node))
+        elif isinstance(node, ast.If) and _is_type_checking(node.test):
+            stack.extend((c, False) for c in node.body)
+            stack.extend((c, eager) for c in node.orelse)
+        else:
+            stack.extend((c, eager) for c in ast.iter_child_nodes(node))
+    return found
+
+
 def _extract_py_imports(src: Path, raw: str, index: _RepoIndex) -> list[_ImportRef]:
-    """Extract Python import edges via AST."""
+    """Extract Python import edges via AST, tagging lazy imports as non-eager."""
     try:
         tree = ast.parse(raw)
     except SyntaxError:
         return []
     refs: list[_ImportRef] = []
-    for node in ast.walk(tree):
+    for node, eager in _iter_py_import_nodes(tree):
         if isinstance(node, ast.Import):
-            for alias in node.names:
-                refs.append(_ImportRef(src, _resolve_py_target(src, alias.name, index), alias.name, node.lineno))
-        elif isinstance(node, ast.ImportFrom):
-            refs.extend(_extract_py_from_import(src, node, index))
+            node_refs = [_ImportRef(src, _resolve_py_target(src, a.name, index), a.name, node.lineno) for a in node.names]
+        else:
+            node_refs = _extract_py_from_import(src, node, index)
+        refs.extend(r if eager else replace(r, eager=False) for r in node_refs)
     return refs
 
 
@@ -291,16 +318,18 @@ def _violates_private_encapsulation(src_dir: tuple[str, ...], dst_segs: tuple[st
 
 def _check_boundary(ref: _ImportRef, root: Path) -> Finding | None:
     """Check one import edge for private-file access or architectural layer violation."""
-    rel_src = to_rel_posix(ref.src, root)
+    rel_src, at = to_rel_posix(ref.src, root), (ref.line, ref.line)
     src_dir, target_segs = _dir_segments(ref.src, root), _spec_segments(ref, root)
     if _violates_private_encapsulation(src_dir, target_segs):
-        return Finding("REDLINE-BOUNDARY", "BLOCKER", rel_src, ref.line, ref.line, f"Cross-module import of private/internal module `{ref.raw_spec}`.", "Import through the target module's public facade/entrypoint instead of internal files.")
+        return make_finding("REDLINE-BOUNDARY", rel_src, at, f"Cross-module import of private/internal module `{ref.raw_spec}`.")
 
     src_layer, dst_layer = _classify_layer(_path_segments(ref.src, root)), _classify_layer(target_segs)
     if src_layer == "presentation" and dst_layer == "persistence":
-        return Finding("REDLINE-BOUNDARY", "BLOCKER", rel_src, ref.line, ref.line, f"Presentation layer imports persistence `{ref.raw_spec}` directly (bypassing Service layer).", "Route calls through an application/service interface rather than DAO/Mapper/Repository.")
+        msg = f"Presentation layer imports persistence `{ref.raw_spec}` directly."
+        return make_finding("ADVISORY-LAYER", rel_src, at, msg)
     if src_layer == "domain" and dst_layer in {"presentation", "infra"}:
-        return Finding("REDLINE-BOUNDARY", "BLOCKER", rel_src, ref.line, ref.line, f"Domain layer imports outer `{dst_layer}` module `{ref.raw_spec}`.", "Invert dependency using a domain interface/port implemented by infrastructure.")
+        msg = f"Domain layer imports outer `{dst_layer}` module `{ref.raw_spec}` (invert via a domain port)."
+        return make_finding("REDLINE-BOUNDARY", rel_src, at, msg)
     return None
 
 
@@ -315,7 +344,7 @@ def _collect_file_edges(
     in_scope = src in resolved_scope
     changed = resolved_scope.get(src)
     for ref in _extract_file_imports(src, index):
-        if ref.target is not None and ref.target != src:
+        if ref.eager and ref.target is not None and ref.target != src:
             adj[src].add(ref.target)
         if not in_scope or (changed is not None and ref.line not in changed):
             continue
@@ -347,5 +376,5 @@ def analyze_graph_and_boundaries(
         if scoped_nodes := [n for n in scc if n in resolved_scope]:
             chain = " -> ".join(to_rel_posix(n, options.root) for n in sorted(scc))
             anchor = to_rel_posix(sorted(scoped_nodes)[0], options.root)
-            findings.append(Finding("REDLINE-CYCLE", "BLOCKER", anchor, 1, 1, f"Circular module dependency detected: `{chain} -> ...`.", "Extract shared contracts/types into a lower acyclic module or invert dependency."))
+            findings.append(make_finding("REDLINE-CYCLE", anchor, (1, 1), f"Circular module dependency detected: `{chain} -> ...`."))
     return findings

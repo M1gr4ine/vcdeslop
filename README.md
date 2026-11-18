@@ -52,7 +52,7 @@ setPostVisibility(postId, "public"); // "public" | "private" | "friends_only"
 
 ### 4. 模块循环依赖 `= 0`，严禁跨层引用私有文件
 - **零循环依赖**：文件、包或 SQL View 之间不得形成 `A -> B -> ... -> A` 环路。
-- **严禁跨层越权与私有偷窥**：表现层（`controller` / `web` / `ui` / `routes`）不得绕过 Service 直接导入持久化层（`mapper` / `dao` / `repository`）；领域层不得反向依赖外层表现/基础设施；禁止跨模块直接导入 `/internal/`、`/_internal/`、`/private/`、`/impl/` 或 Python `._private` 内部文件。
+- 表现层直接导入持久化层时，扫描器给出 `[WARNING]`。审查者依据仓库的分层约定判断是否需要经过 Service。领域层反向依赖表现层或基础设施，以及跨模块访问私有实现，仍为 `[BLOCKER]`。私有路径包括 `/internal/`、`/_internal/`、`/private/`、`/impl/` 或 Python `._private` 内部文件。
 
 ---
 
@@ -69,7 +69,7 @@ setPostVisibility(postId, "public"); // "public" | "private" | "friends_only"
 
 ## 四、重点支持语言与实战看点
 
-- **Java（Tier 1）**：Spring/MyBatis/JPA 分层守门（禁止在 Controller 注入 Mapper 或泄漏 `@Entity`）、拒绝单实现 `IXxxService` 空壳接口膨胀、用 `record` 收敛 >4 参数与布尔陷阱、禁止返回 `null` 集合、拦截循环体 N+1 查询；推荐联动 `ArchUnit`、`PMD`、`Pitest`。
+- **Java（Tier 1）**：Spring/MyBatis/JPA 分层守门（按仓库分层约定检查 Controller 注入 Mapper，防止泄漏 `@Entity`）、拒绝单实现 `IXxxService` 空壳接口膨胀、用 `record` 收敛 >4 参数与布尔陷阱、禁止返回 `null` 集合、拦截循环体 N+1 查询；推荐联动 `ArchUnit`、`PMD`、`Pitest`。
 - **JavaScript / TypeScript（Tier 1）**：Options 对象替代多布尔开关、杜绝 `as any` 与异步 `try/catch` 吞错、识别 Barrel `index.ts` 循环引用与跨模块 `internal/` 导入、纠正 React `useEffect` 同步派生状态与嵌套 JSX 三元；推荐联动 `eslint-plugin-sonarjs`、`jscpd`、`dependency-cruiser`、`knip`、`Stryker`。
 - **SQL（Tier 1）**：拦截 `SELECT *`、`SELECT DISTINCT` 掩盖 Join 爆炸、`WHERE DATE(col)` 等非 Sargable 索引杀手、`${}` 原生拼接注入风险，以及外键非空却用 `LEFT JOIN + COALESCE` 掩盖脏数据；将复杂度 > 15 的嵌套子查询/多重 `CASE` 拆解为命名 `WITH` CTE；推荐联动 `sqlfluff`。
 - **AI 高频其他语言（Tier 2）**：**Python**（`*` 强制关键字布尔参数、AST 复杂度、`complexipy`/`tach`/`vulture`/`mutmut`）、**Go**（调用方定义接口、禁止 `_ = err`、`golangci-lint`）、**Rust**（节制 `.unwrap()`/`.clone()`、`clippy`）、**Shell / PowerShell**（禁止 `|| true`/`SilentlyContinue` 静默吞错）。
@@ -78,7 +78,7 @@ setPostVisibility(postId, "public"); // "public" | "private" | "friends_only"
 
 ## 五、安装
 
-脚本全部使用操作系统原生能力（Windows PowerShell / macOS·Linux Bash），**无需 Python**；各 Agent 的 Skill、Subagent、Hook 与全局规则配置一次到位：
+Windows 使用 PowerShell，macOS 和 Linux 使用 Bash。两种安装器均无需 Python。POSIX 上安装 Claude、Codex、DSH 或 Antigravity 时需要 `jq`，hook 运行时也会用它解析事件。Cursor 使用 `alwaysApply` 规则，仅在清理已有 `hooks.json` 时需要 `jq`。
 
 ```powershell
 # Windows (PowerShell)：将目标换为 claude | codex | dsh | antigravity | cursor | all

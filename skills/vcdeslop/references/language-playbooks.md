@@ -40,7 +40,7 @@ Concrete `Slop -> High-Taste` refactors and deterministic repo tools organized b
    }
    ```
 3. **Layer Bypasses & Shallow `IXxxService` Wrapper Bloat**:
-   - `[BLOCKER]` `Controller` directly injecting `OrderMapper` / `OrderRepository` or returning JPA `@Entity` objects instead of response DTOs.
+   - `[WARNING]` A controller injects `OrderMapper` / `OrderRepository` directly. Check whether the project requires a service boundary. Returning JPA `@Entity` objects across a required DTO boundary is a `[BLOCKER]`.
    - `[WARNING]` Creating `interface FooService` + `FooServiceImpl` with only 1 implementation that just forwards `return fooMapper.selectById(id)` without transaction boundaries or domain rules. Use concrete `@Service` classes unless multiple implementations or SPI boundaries exist.
 4. **N+1 Queries & Missing Boundary Batching**: Calling `mapper.selectById(...)` inside a `for` loop over query results; batch with `IN (...)` or a single join query.
 5. **Type Evasion**: `@SuppressWarnings("unchecked")` or raw `Map<String, Object>` bags passing through services -> replace with typed `record` DTOs.

@@ -34,6 +34,72 @@ done
 if [[ ${#TARGETS[@]} -eq 0 ]] || printf '%s\n' "${TARGETS[@]}" | grep -qx "all"; then
   TARGETS=("universal" "claude" "codex" "dsh" "antigravity" "cursor")
 fi
+
+hook_json_path() {
+  local target="$1" file="hooks.json"
+  [[ "$target" == "claude" ]] && file="settings.json"
+  printf '%s/.%s/%s' "$HOME_DIR" "$target" "$file"
+}
+
+require_jq() {
+  command -v jq >/dev/null 2>&1 && return 0
+  echo "Error: jq is required for $1; install jq before proceeding." >&2
+  return 1
+}
+
+resolve_hook_path() {
+  local path="$1" link hops=0
+  while [[ -L "$path" ]]; do
+    ((hops += 1))
+    if (( hops > 40 )); then
+      echo "Error: too many hook JSON symlinks: $1" >&2
+      return 1
+    fi
+    link="$(readlink "$path")" || return 1
+    if [[ "$link" == /* ]]; then path="$link"; else path="$(dirname "$path")/$link"; fi
+  done
+  printf '%s' "$path"
+}
+
+validate_hook_json() {
+  local dest="$1" resolved="$1"
+  if [[ -L "$dest" && ! -f "$dest" ]]; then
+    echo "Error: dangling or invalid hook JSON symlink: $dest; no changes made." >&2
+    return 1
+  fi
+  [[ -L "$dest" ]] && resolved="$(resolve_hook_path "$dest")"
+  [[ -f "$dest" ]] || return 0
+  if ! jq -se '
+    length == 1 and (.[0] | type == "object" and
+      ((.hooks // {}) | type == "object") and
+      ((.hooks.UserPromptSubmit // []) | type == "array"))
+  ' "$resolved" >/dev/null; then
+    echo "Error: invalid hook JSON in $dest; no changes made." >&2
+    return 1
+  fi
+}
+
+preflight_hook_target() {
+  local target="$1" dest
+  if [[ "$target" == "antigravity" && "$ACTION" == "install" ]]; then
+    require_jq "the Antigravity hook"
+    return
+  fi
+  [[ "$target" =~ ^(claude|codex|dsh|cursor)$ ]] || return 0
+  dest="$(hook_json_path "$target")"
+  [[ -f "$dest" || -L "$dest" || ( "$target" != "cursor" && "$ACTION" == "install" ) ]] || return 0
+  require_jq "hook JSON updates"
+  validate_hook_json "$dest"
+}
+
+preflight_hook_json() {
+  local target
+  for target in "${TARGETS[@]}"; do
+    preflight_hook_target "$target"
+  done
+}
+
+preflight_hook_json
 [[ -f "$HOOK_BIN" && "$RUN_MODE" == "apply" ]] && chmod +x "$HOOK_BIN"
 
 backup_dest() {
@@ -119,104 +185,59 @@ write_with_backup() {
   echo "Updated: $dest"
 }
 
-write_initial_hook_json() {
-  local dest="$1" cmd="$2"
-  mkdir -p "$(dirname "$dest")"
-  cat > "$dest" <<EOF
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${cmd//\"/\\\"}",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
-}
-EOF
-  echo "Updated: $dest"
-}
-
-merge_hook_node() {
-  local dest="$1" cmd="$2"
-  DESLOP_FILE="$dest" DESLOP_CMD="$cmd" DESLOP_ACTION="$ACTION" node -e '
-    const fs = require("fs");
-    const p = process.env.DESLOP_FILE, cmd = process.env.DESLOP_CMD, act = process.env.DESLOP_ACTION;
-    const d = JSON.parse(fs.readFileSync(p, "utf8") || "{}");
-    d.hooks = d.hooks || {};
-    const cur = Array.isArray(d.hooks.UserPromptSubmit) ? d.hooks.UserPromptSubmit : [];
-    const next = cur.filter(e => !Array.isArray(e.hooks) || !e.hooks.some(h => String(h.command || "").includes("vcdeslop-hook")));
-    if (act === "install") next.push({ matcher: "", hooks: [{ type: "command", command: cmd, timeout: 5 }] });
-    if (next.length) d.hooks.UserPromptSubmit = next; else delete d.hooks.UserPromptSubmit;
-    if (!Object.keys(d.hooks).length) delete d.hooks;
-    fs.writeFileSync(p, JSON.stringify(d, null, 2) + "\n");
-  '
-}
-
-merge_hook_jq() {
-  local dest="$1" cmd="$2" tmp="${1}.tmp.$$"
-  if [[ "$ACTION" == "install" ]]; then
-    jq --arg cmd "$cmd" '.hooks = (.hooks // {}) | .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // [] | map(select((.hooks // [] | any(.command // "" | contains("vcdeslop-hook"))) | not))) + [{matcher:"",hooks:[{type:"command",command:$cmd,timeout:5}]}])' "$dest" > "$tmp"
-  else
-    jq '.hooks.UserPromptSubmit |= (if . then map(select((.hooks // [] | any(.command // "" | contains("vcdeslop-hook"))) | not)) else [] end) | if (.hooks.UserPromptSubmit | length) == 0 then del(.hooks.UserPromptSubmit) else . end | if (.hooks | length) == 0 then del(.hooks) else . end' "$dest" > "$tmp"
+merge_hook_json() {
+  local dest="$1" cmd="$2" operation="$3" tmp input="/dev/null" write_dest
+  write_dest="$(resolve_hook_path "$dest")"
+  [[ -f "$dest" ]] && input="$write_dest"
+  mkdir -p "$(dirname "$write_dest")"
+  tmp="$(mktemp "${write_dest}.tmp.XXXXXX")"
+  [[ -f "$dest" ]] && cp -p "$write_dest" "$tmp"
+  if ! jq -s --arg cmd "$cmd" --arg operation "$operation" '
+    def script_path:
+      "(?:\u0022(?:[^\u0022]*[/\\\\])?vcdeslop-hook(?:\\.ps1|\\.cmd)?\u0022|" +
+      "\u0027(?:[^\u0027]*[/\\\\])?vcdeslop-hook(?:\\.ps1|\\.cmd)?\u0027|" +
+      "(?:[^[:space:]\u0022\u0027]*[/\\\\])?vcdeslop-hook(?:\\.ps1|\\.cmd)?)";
+    def owned:
+      type == "object" and
+      ((.command // "" | if type == "string" then . else "" end) |
+        test("^[[:space:]]*(?:(?:powershell|pwsh)(?:\\.exe)?[[:space:]]+(?:[^[:space:]]+[[:space:]]+)*-file[[:space:]]+)?"
+          + script_path + "[[:space:]]+(?:claude|codex|dsh|cursor)[[:space:]]*$"; "i"));
+    def cleaned:
+      map(if type == "object" and (.hooks | type == "array") then
+        .hooks as $old | .hooks |= map(select(owned | not)) |
+        if ($old | any(owned)) and (.hooks | length == 0) then empty else . end
+      else . end);
+    (if length == 0 then {} else .[0] end) | . as $original |
+    if .hooks.UserPromptSubmit != null then .hooks.UserPromptSubmit |= cleaned else . end |
+    if $operation == "install" then
+      .hooks = (.hooks // {}) |
+      .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) +
+        [{matcher:"",hooks:[{type:"command",command:$cmd,timeout:5}]}])
+    elif (($original.hooks.UserPromptSubmit? // []) | length > 0) and
+         (.hooks.UserPromptSubmit? | type == "array" and length == 0) then
+      del(.hooks.UserPromptSubmit) | if (.hooks | length) == 0 then del(.hooks) else . end
+    else . end
+  ' < "$input" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
   fi
-  mv "$tmp" "$dest"
-}
-
-merge_hook_python() {
-  local dest="$1" cmd="$2"
-  DESLOP_FILE="$dest" DESLOP_CMD="$cmd" DESLOP_ACTION="$ACTION" python3 -c '
-import json, os
-p, cmd, act = os.environ["DESLOP_FILE"], os.environ["DESLOP_CMD"], os.environ["DESLOP_ACTION"]
-with open(p, "r", encoding="utf-8") as fh:
-    d = json.load(fh)
-hooks = d.setdefault("hooks", {})
-cur = [e for e in hooks.get("UserPromptSubmit", []) if not any("vcdeslop-hook" in str(h.get("command", "")) for h in e.get("hooks", []))]
-if act == "install":
-    cur.append({"matcher": "", "hooks": [{"type": "command", "command": cmd, "timeout": 5}]})
-if cur:
-    hooks["UserPromptSubmit"] = cur
-else:
-    hooks.pop("UserPromptSubmit", None)
-if not hooks:
-    d.pop("hooks", None)
-with open(p, "w", encoding="utf-8") as fh:
-    json.dump(d, fh, indent=2, ensure_ascii=False); fh.write("\n")
-'
-}
-
-merge_existing_hook_json() {
-  local dest="$1" cmd="$2"
-  if command -v node >/dev/null 2>&1; then
-    cp "$dest" "$(backup_dest "$dest")"
-    merge_hook_node "$dest" "$cmd"
-  elif command -v jq >/dev/null 2>&1; then
-    cp "$dest" "$(backup_dest "$dest")"
-    merge_hook_jq "$dest" "$cmd"
-  elif command -v python3 >/dev/null 2>&1; then
-    cp "$dest" "$(backup_dest "$dest")"
-    merge_hook_python "$dest" "$cmd"
-  else
-    echo "Warning: existing $dest left untouched (install node, jq, or python3 to merge JSON automatically)." >&2
+  if [[ -f "$dest" ]] && jq -se 'length == 2 and .[0] == .[1]' "$write_dest" "$tmp" >/dev/null; then
+    rm -f "$tmp"
     return 0
   fi
+  if [[ -f "$dest" ]]; then cp "$write_dest" "$(backup_dest "$dest")"; fi
+  mv "$tmp" "$write_dest"
   echo "Updated: $dest"
 }
 
 update_hook_json() {
-  local harness="$1" dir="$2" file="hooks.json"
-  [[ "$harness" == "claude" ]] && file="settings.json"
-  local dest="$dir/$file" cmd="\"$HOOK_BIN\" $harness"
-  [[ "$ACTION" == "uninstall" && ! -f "$dest" ]] && return 0
-  if [[ "$RUN_MODE" == "dry-run" ]]; then echo "[DRY-RUN] Update hook ($ACTION): $dest"; return 0; fi
-  if [[ "$ACTION" == "install" && ! -f "$dest" ]]; then write_initial_hook_json "$dest" "$cmd"; return 0; fi
-  merge_existing_hook_json "$dest" "$cmd"
+  local harness="$1" dir="$2" dest cmd operation="$ACTION"
+  dest="$(hook_json_path "$harness")"
+  cmd="\"$HOOK_BIN\" $harness"
+  [[ "$harness" == "cursor" ]] && operation="uninstall"
+  [[ "$operation" == "uninstall" && ! -f "$dest" ]] && return 0
+  if [[ "$RUN_MODE" == "dry-run" ]]; then echo "[DRY-RUN] Update hook ($operation): $dest"; return 0; fi
+  merge_hook_json "$dest" "$cmd" "$operation"
 }
 
 remove_rule_gate() {
@@ -296,6 +317,7 @@ for target in "${TARGETS[@]}"; do
       ;;
     codex|dsh|cursor)
       sync_entry "dir" "$SKILL_SRC" "$HOME_DIR/.$target/skills/vcdeslop"
+      # Cursor uses the rule gate; clean obsolete hooks during install and uninstall.
       update_hook_json "$target" "$HOME_DIR/.$target"
       update_rule_gate "$target" "$HOME_DIR/.$target"
       ;;

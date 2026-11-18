@@ -7,7 +7,7 @@ description: >-
   preflight scan plus an isolated, same-model (`inherit`) subagent for double-blind
   review across Java, JS/TS, SQL, Python, Go, and Rust—enforcing Cognitive
   Complexity <= 15, zero Boolean Traps, positional params <= 4, zero duplicate
-  blocks, zero circular or cross-layer imports, tombstone dead-code reaping, and
+  blocks, zero circular or private cross-module imports, tombstone dead-code reaping, and
   mutation-test rigor.
 license: MIT
 metadata:
@@ -66,6 +66,11 @@ Provide the subagent with:
 3. Instructions to read **only** [Review Rubric](./references/review-rubric.md), the matching section(s) of [Language Playbooks](./references/language-playbooks.md), and scoped files/callers/tests inside `<repo_root>` (never inspect external host configs, IDE/harness docs, or web search).
 4. **Mode-aware output contract**: emit the full Review Report in `Review Mode`, or ONLY the Compact Action List (`file:line + tag -> surgical edit`, omitting tables and code patches) in `CleanAudit`.
 5. **Scope scaling (`<= 8` vs `> 8` files)**: dispatch **1** isolated `inherit` subagent for `<= 8` scoped files; for `> 8` files or `--mode all`, run `preflight_scan.py` first and shard scoped files by directory/module across **2–3 parallel** isolated `inherit` subagents.
+
+**Orchestrator discipline (what keeps it double-blind and cheap):**
+- **No leading hints**: pass facts (scope, preflight output), never suspicions ("check why X", "look at installers"). Hypotheses anchor the reviewer and defeat the blind pass.
+- **No shadow review**: while the reviewer runs, do not read and audit the same files yourself; wait for its report, then verify only the items you will act on.
+- **Preflight is a heuristic signal, not a verdict**: regex/AST metrics have false positives and blind spots (renamed clones, narrative comments, redundant null checks). The reviewer confirms each `[BLOCKER]` in source before it blocks, and hunts what the scanner cannot see.
 
 ### Step 4: Synthesize Report or Apply Regression-Safe Cleanup
 

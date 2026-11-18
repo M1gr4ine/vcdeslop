@@ -7,7 +7,7 @@
   1. Single-function Cognitive Complexity <= 15 (file size > 400 lines is advisory `[WARNING]` only; never block cohesive deep modules).
   2. Zero Boolean Flag Parameters (`Boolean Trap`) & <= 4 positional parameters (use split functions, named options/DTO/Record/`*`, or Enums; trivial single-arg `setXxx(bool)` setters exempt).
   3. Newly added duplicate code blocks = 0 (search & reuse existing helpers).
-  4. Module circular dependencies = 0; zero cross-layer or cross-module private-file imports.
+  4. Block import cycles, cross-module private imports, and domain dependencies on outer layers. Report direct presentation-to-persistence imports as warnings for architectural review.
 
 ## Mandatory Review Auto-Trigger
 - Whenever the user asks to **review code, review a PR/branch/diff, audit maintainability, or deslop changes**:

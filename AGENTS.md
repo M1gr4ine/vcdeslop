@@ -22,7 +22,7 @@ vcdeslop/
 │   │   └── harness-adapters.md      # Same-model (`inherit`) subagent spawn rules
 │   └── scripts/
 │       ├── preflight_scan.py        # CLI entrypoint (zero external dependencies)
-│       └── analyzers/               # Modular DAG: models / lexers -> git_scope / complexity_params -> clones_slop / graph_boundaries
+│       └── analyzers/               # Modular DAG: models / lexers -> metrics_brace / git_scope -> complexity_params / clones_slop / graph_boundaries
 ├── adapters/
 │   ├── hooks/                       # Native OS lifecycle hooks (`vcdeslop-hook.ps1`/`.cmd` & `vcdeslop-hook`)
 │   ├── claude/ & antigravity/       # Harness subagent presets
@@ -55,11 +55,12 @@ vcdeslop/
      - Duplicate normalized code blocks `= 0`
      - Module circular dependencies `= 0` and zero private cross-module imports
    - Keep `skills/vcdeslop/scripts/analyzers/` strictly acyclic (DAG):
-     `models` / `lexers` <- `git_scope` / `complexity_params` <- `clones_slop` / `graph_boundaries` <- `__init__`.
+     `models` / `lexers` <- `metrics_brace` / `git_scope` <- `complexity_params` / `clones_slop` / `graph_boundaries` <- `__init__`.
+   - Rule severities and remedies live in one catalog (`models.RULES`); build findings with `make_finding(...)` instead of repeating severity/remedy strings.
 
 ## 3. Extending Rules & Language Support
 
-- **Adding a new complexity or parameter rule**: Update `skills/vcdeslop/scripts/analyzers/complexity_params.py` and keep language-specific patterns table-driven.
+- **Adding a new complexity or parameter rule**: Brace languages + PowerShell live in `analyzers/metrics_brace.py`; Python/SQL/shell metrics and the finding translation live in `analyzers/complexity_params.py`. Keep language-specific patterns table-driven.
 - **Adding a new slop/SQL check**: Add a `_SlopSpec` entry in `skills/vcdeslop/scripts/analyzers/clones_slop.py` and document the refactor pattern in `skills/vcdeslop/references/language-playbooks.md`.
 - **Adding boundary rules**: Extend layer sets or import parsers in `skills/vcdeslop/scripts/analyzers/graph_boundaries.py`.
 - **Every new rule MUST include a positive violation fixture AND a false-positive exemption case** in `tests/verify_scanner.py`.

@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from analyzers import Finding, ScanOptions, run_scan  # noqa: E402
+from analyzers.clones_slop import detect_ai_slop  # noqa: E402
 from preflight_scan import main as preflight_main  # noqa: E402
 from tests.test_hooks_and_git import run_integration_tests  # noqa: E402
 
@@ -79,7 +80,7 @@ public class OrderSafe {
     _assert_rules(
         findings,
         (
-            ("REDLINE-BOUNDARY", "OrderController.java", ""),
+            ("ADVISORY-LAYER", "OrderController.java", ""),
             ("REDLINE-BOOL-TRAP", "OrderController.java", ""),
             ("REDLINE-PARAMS", "OrderController.java", ""),
             ("SLOP-SILENT-CATCH", "OrderController.java", ""),
@@ -168,6 +169,12 @@ WHERE DATE(o.created_at) = '2026-01-01' AND o.tenant = ${tenantId}
         (),
     )
     assert not any(f.file.endswith("clean.sql") for f in findings)
+    sql_smells = {f.message: f.remedy for f in findings if f.rule_id == "SLOP-SQL-SMELL"}
+    assert any("column names" in remedy for remedy in sql_smells.values())
+    assert any("cardinality" in remedy for remedy in sql_smells.values())
+    assert any("range predicate" in remedy for remedy in sql_smells.values())
+    assert all(f.severity == "WARNING" for f in findings if f.rule_id == "SLOP-SQL-SMELL")
+    assert all(f.severity == "BLOCKER" for f in findings if f.rule_id == "SLOP-SQL-INJECTION")
 
 
 def test_python_and_shell_rules() -> None:
@@ -236,6 +243,100 @@ def sync_good(src: str, flags: list[bool], *, dry_run: bool = False) -> None:
             assert preflight_main(["--path", str(root), "--files", "pkg_dup/giant.py", "--gate", "strict"]) == 0
 
 
+def test_accuracy_regressions() -> None:
+    """Lock callback-type bool exemptions, lazy-import cycles, lambda nesting, and AST silent-catch detection."""
+    deep_ts = (
+        "export function deep(xs: number[][]): number {\n  let n = 0;\n  xs.forEach((row) => {\n"
+        "    row.forEach((v) => {\n      if (v > 0) {\n        if (v > 1) {\n          if (v > 2) {\n"
+        "            if (v > 3) { n++; }\n          }\n        }\n      }\n    });\n  });\n  return n;\n}\n"
+    )
+    findings = _scan_temp_files(
+        {
+            "web/callback.ts": "export function onDone(cb: (ok: boolean) => void): void { cb(true); }\n",
+            "web/flag.ts": "export function render(id: string, compact: boolean): string { return id; }\n",
+            "web/deep.ts": deep_ts,
+            "svc/run.go": "package svc\nfunc Run(fn func(bool) error) error { return fn(true) }\n",
+            "tc/__init__.py": "",
+            "tc/a.py": "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from tc.b import B\n",
+            "tc/b.py": "from tc.a import TYPE_CHECKING\nclass B: ...\n",
+            "lazy/__init__.py": "",
+            "lazy/a.py": "def f():\n    from lazy.b import g\n    return g()\n",
+            "lazy/b.py": "from lazy.a import f\ndef g():\n    return 1\n",
+            "eager/__init__.py": "",
+            "eager/a.py": "from eager.b import g\n",
+            "eager/b.py": "from eager.a import g as h\ng = 1\n",
+            "errs/io.py": (
+                "import os\ndef load(paths):\n    out = []\n    for p in paths:\n        try:\n            out.append(open(p).read())\n"
+                "        except OSError:\n            continue\n    return out\n"
+                "def risky(p):\n    try:\n        return open(p).read()\n    except Exception as e:\n        print(e)\n        return None\n"
+            ),
+        }
+    )
+    _assert_rules(
+        findings,
+        (
+            ("REDLINE-BOOL-TRAP", "web/flag.ts", "compact"),
+            ("REDLINE-COMPLEXITY", "web/deep.ts", "deep"),
+            ("REDLINE-CYCLE", "eager/", ""),
+            ("SLOP-SILENT-CATCH", "errs/io.py", ""),
+        ),
+        (("REDLINE-BOOL-TRAP", "onDone"), ("REDLINE-BOOL-TRAP", "Run"), ("REDLINE-CYCLE", "tc/"), ("REDLINE-CYCLE", "lazy/")),
+    )
+    silent = [f for f in findings if f.rule_id == "SLOP-SILENT-CATCH"]
+    assert [f.line for f in silent] == [13], f"Only the broad log-and-return handler should fire, got {silent}"
+
+
+def test_scanner_scope_edges() -> None:
+    """Check eager else branches, callback defaults, and independent boundary severities."""
+    findings = _scan_temp_files({
+        "web/flags.ts": "export function render(id: string, compact: boolean = Boolean(id)) {}\n"
+                        "export function onDone(cb: (ok: boolean) => void) {}\n"
+                        "export function check(id: number, enabled: boolean = id < 5) {}\n"
+                        "export function nested(cb: ((ok: boolean) => void)) {}\n"
+                        "export function extra(id: number, active = id < 5, secure: boolean) {}\n"
+                        "export function configure(a: number, b: number, cb = factory<A, B>(), secure: boolean) {}\n",
+        "guard/a.py": "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    pass\nelse:\n    from guard.b import value\n",
+        "guard/b.py": "from guard.a import TYPE_CHECKING\nvalue = 1\n",
+        "fake/a.py": "class Settings:\n    TYPE_CHECKING = True\nsettings = Settings()\n"
+                     "if settings.TYPE_CHECKING:\n    from fake.b import value\n",
+        "fake/b.py": "from fake.a import settings\nvalue = 1\n",
+        "web/view.ts": "import {x} from '../repository/store';\n",
+        "repository/store.ts": "export const x = 1;\n",
+        "web/secret.ts": "import {x} from '../other/internal/secret';\n",
+        "other/internal/secret.ts": "export const x = 1;\n",
+    })
+    _assert_rules(findings, (
+        ("REDLINE-BOOL-TRAP", "web/flags.ts", "compact"),
+        ("REDLINE-BOOL-TRAP", "web/flags.ts", "enabled"),
+        ("REDLINE-BOOL-TRAP", "web/flags.ts", "secure"),
+        ("REDLINE-CYCLE", "guard/", ""),
+        ("REDLINE-CYCLE", "fake/", ""),
+        ("ADVISORY-LAYER", "web/view.ts", ""),
+        ("REDLINE-BOUNDARY", "web/secret.ts", ""),
+    ), (("REDLINE-BOOL-TRAP", "onDone"), ("REDLINE-BOOL-TRAP", "nested"), ("REDLINE-PARAMS", "configure")))
+    severities = {f.rule_id: f.severity for f in findings}
+    assert severities["ADVISORY-LAYER"] == "WARNING"
+    assert severities["REDLINE-BOUNDARY"] == severities["REDLINE-CYCLE"] == "BLOCKER"
+
+
+def test_silent_handler_sentinels() -> None:
+    """Distinguish False from zero and retain explicit recovery and propagation."""
+    findings = _scan_temp_files({"exceptions.py": (
+        "def zero():\n    try: work()\n    except Exception: return 0\n"
+        "def fail():\n    try: work()\n    except Exception: return False\n"
+        "def recover():\n    try: work()\n    except ValueError: return fallback()\n"
+        "def propagate():\n    try: work()\n    except Exception: raise\n"
+        "def combined():\n    try: work()\n    except (ValueError, Exception): return None\n"
+    )})
+    lines = [f.line for f in findings if f.rule_id == "SLOP-SILENT-CATCH"]
+    assert lines == [6, 15], lines
+    raw = "try:\n    work()\nexcept Exception:\n    print('failed')\n    return_value = None\n"
+    assert not detect_ai_slop(Path("exceptions.py"), raw, {4}, Path.cwd())
+    raw = "def fail():\n    try: work()\n    except Exception:\n        print('failed')\n        return None\n"
+    changed_findings = detect_ai_slop(Path("exceptions.py"), raw, {5}, Path.cwd())
+    assert len(changed_findings) == 1 and changed_findings[0].line == 3
+
+
 def test_self_dogfooding() -> None:
     """Assert the entire deslop repository passes its own preflight redlines with 0 findings."""
     report = run_scan(ScanOptions(root=REPO_ROOT, scan_mode="all"))
@@ -250,6 +351,9 @@ def main() -> int:
     test_ts_fixtures()
     test_sql_fixtures()
     test_python_and_shell_rules()
+    test_accuracy_regressions()
+    test_scanner_scope_edges()
+    test_silent_handler_sentinels()
     run_integration_tests()
     test_self_dogfooding()
     print("ALL TESTS PASSED")

@@ -60,20 +60,30 @@ def find_matching(text: str, open_idx: int, open_ch: str, close_ch: str) -> int:
     return -1
 
 
+def _is_generic_call(raw: str, index: int) -> bool:
+    """Recognize common generic calls in default expressions, such as factory<A, B>()."""
+    return bool(re.match(r"<[\w\s,.$<>\[\]|&?]+>\s*\(", raw[index:]))
+
+
 def split_top_level_params(raw_params: str) -> list[str]:
     """Split comma-separated parameter list respecting nested delimiters."""
     if not raw_params.strip():
         return []
     parts: list[str] = []
-    depth, start = 0, 0
+    start = 0
+    stack: list[str] = []
+    in_default = False
     for idx, ch in enumerate(raw_params):
-        if ch in "([<{":
-            depth += 1
-        elif ch in ")]>}":
-            depth = max(0, depth - 1)
-        elif ch == "," and depth == 0:
+        if ch == "=" and not stack and raw_params[idx:idx + 2] != "=>":
+            in_default = True
+        elif ch in "([{" or (ch == "<" and (not in_default or _is_generic_call(raw_params, idx))):
+            stack.append(ch)
+        elif stack and ch in ")]}>" and { ")": "(", "]": "[", "}": "{", ">": "<" }[ch] == stack[-1]:
+            stack.pop()
+        elif ch == "," and not stack:
             parts.append(raw_params[start:idx].strip())
             start = idx + 1
+            in_default = False
     if tail := raw_params[start:].strip():
         parts.append(tail)
     return [p for p in parts if p not in {"self", "&self", "&mut self"} and not p.startswith("this:")]

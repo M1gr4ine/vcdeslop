@@ -9,17 +9,18 @@ if [ -z "$INPUT" ]; then
   exit 0
 fi
 
-PROMPT="$(printf '%s\n' "$INPUT" | awk '
-  { buf = buf " " $0 }
-  END {
-    if (match(buf, /"(lastUserInput|prompt|user_prompt)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"/)) {
-      s = substr(buf, RSTART, RLENGTH)
-      sub(/^"[^"]*"[[:space:]]*:[[:space:]]*"/, "", s)
-      sub(/"$/, "", s)
-      print s
-    }
-  }
-')"
+# Parse only top-level JSON fields. If jq is unavailable or input is invalid, fail open.
+if ! command -v jq >/dev/null 2>&1; then
+  printf '{}\n'
+  exit 0
+fi
+
+PROMPT="$(printf '%s\n' "$INPUT" | jq -er --arg harness "$HARNESS" '
+  if type != "object" then empty
+  elif $harness == "antigravity" and has("invocationNum") and .invocationNum != 0 then empty
+  else [.lastUserInput, .prompt, .user_prompt] | map(select(type == "string" and length > 0)) | .[0] // ""
+  end
+' 2>/dev/null)" || PROMPT=""
 
 if [ -z "$PROMPT" ]; then
   printf '{}\n'
@@ -33,7 +34,7 @@ if ! printf '%s\n' "$PROMPT" | grep -Eiq "$REVIEW_ERE"; then
   exit 0
 fi
 
-REMINDER='[vcdeslop auto-trigger] Review/cleanup intent detected. Follow the `vcdeslop` skill protocol:\n1. If python/python3 is available, run `python <vcdeslop_skill_dir>/scripts/preflight_scan.py --path . --mode diff`; otherwise inspect repo linters + raw git diff directly.\n2. Delegate review to a fresh isolated (`spawn`, never `fork`) subagent running on the EXACT SAME model (`inherit`, never `haiku`/`flash`/`flash_lite`/`mini`/`Explore`).\n3. Enforce the 4 Hard Redlines (Single-function Cognitive Complexity <= 15; Zero Boolean Traps & <= 4 positional params; Zero duplicate blocks; Zero circular or cross-layer/private imports; oversized files > 400 lines are advisory WARNING only) plus Cursor deslop, tombstone dead-code reaping, and mental mutation audit.'
+REMINDER='[vcdeslop auto-trigger] Review/cleanup intent detected: activate the `vcdeslop` skill and follow its protocol (preflight scan if Python exists -> fresh same-model reviewer subagent -> verdict or surgical cleanup).'
 
 if [ "$HARNESS" = "antigravity" ]; then
   printf '{"injectSteps":[{"systemMessage":{"systemMessage":"%s"}}]}\n' "$REMINDER"
