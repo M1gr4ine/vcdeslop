@@ -15,8 +15,8 @@ CORE RULES:
 1. DO NOT TRUST any prior implementation summary, commit claim, or "tests pass" assertion. Independently verify the actual `git diff`, full surrounding files, callers, and test code.
 2. Read ONLY `references/review-rubric.md`, the relevant language sections of `references/language-playbooks.md`, and files/callers/tests inside the target `<repo_root>` (stay within your assigned file shard if sharded). NEVER inspect external directories, IDE/harness built-in docs, or web resources.
 3. Evaluate every scoped change against:
-   - The 4 Hard Quantitative Maintainability Redlines ([BLOCKER])
-   - Cursor Deslop Hygiene (slop comments, abnormal defensive checks/catches, type evasion, deep nesting, style drift)
+   - The 3 Hard Quantitative Maintainability Redlines ([BLOCKER])
+   - Cursor Deslop Hygiene (slop comments, abnormal defensive checks/catches, type evasion, unnecessary nesting, style drift)
    - Architecture & Cognitive Load Taste (Karpathy Simplicity & Surgical Changes, Ousterhout Deep Modules, Grug 3 AM readability)
    - Tombstone & Dead Code Reaping
    - Mental Mutation Test / Anti-Verification-Theater Audit
@@ -30,16 +30,11 @@ CORE RULES:
 
 ## 2. Five Audit Dimensions
 
-### Dimension A: 4 Hard Quantitative Maintainability Redlines (`[BLOCKER]`)
+### Dimension A: 3 Hard Quantitative Maintainability Redlines (`[BLOCKER]`)
 
 Any violation in scoped additions or modifications blocks merge (`Verdict: BLOCK`) unless explicitly justified in writing by an architectural exception:
 
-1. **Single-Function Cognitive Complexity <= 15**
-   - `REDLINE-COMPLEXITY` (`[BLOCKER]`): Any added/modified function, method, or SQL query exceeding **Cognitive Complexity 15** (penalizing nesting depth, mixed boolean chains `&&`/`||`, breaks in linear flow, and nested subqueries/`CASE`).
-   - *Advisory Large-File Check (`SLOP-FILE-SIZE`, `[WARNING]` only — never `[BLOCKER]`)*: Files exceeding 400 lines emit a non-blocking warning to inspect domain cohesion; never chop cohesive **Deep Modules** into shallow pass-through files solely to hit an arbitrary line count.
-   - *Fix*: Guard clauses / early returns, cohesive domain sub-functions, lookup maps/dispatch tables, or SQL `WITH` CTEs.
-
-2. **Zero Boolean Flag Parameters (Boolean Trap) & Positional Params <= 4**
+1. **Zero Boolean Flag Parameters (Boolean Trap) & Positional Params <= 4**
    - `REDLINE-BOOL-TRAP` (`[BLOCKER]`): **Zero Boolean flag arguments** (`true`/`false` positional parameters that switch internal behavior branches, e.g., `deleteOrder(id, true)` or `sendMsg(user, txt, true, false)`).
      - *Why*: Call sites become unreadable guessing games and every extra boolean splits the function into $2^N$ tangled branches.
      - *3 Canonical Refactors*:
@@ -49,12 +44,12 @@ Any violation in scoped additions or modifications blocks merge (`Verdict: BLOCK
      - *Sole Exemption*: Trivial single-property setters whose method name states the toggle clearly (`button.setDisabled(true)`, `modal.setVisible(false)`).
    - `REDLINE-PARAMS` (`[BLOCKER]`): More than **4 positional parameters** (`> 4`). Consolidate into a domain Record / DTO / Options struct.
 
-3. **Newly Added Duplicate Code Blocks = 0 (`新增重复代码块 = 0`)**
+2. **Newly Added Duplicate Code Blocks = 0 (`新增重复代码块 = 0`)**
    - `REDLINE-DUPLICATION` (`[BLOCKER]`): Zero newly copy-pasted or ~80%-similar logic blocks (>= 10 normalized lines) across files or inside the same file. Search the repository for existing helpers before creating new ones.
      - *Scanner coverage*: `preflight_scan.py` only catches **exact** clones after whitespace/comment/string normalization. Copy-paste-and-rename clones (different identifiers, same shape) are invisible to it—the reviewer must hunt those by reading.
    - *Balance against Wrong Abstraction*: If two blocks merely look structurally similar today while representing **independently evolving business domains**, do **NOT** merge them by introducing a Boolean Trap monstrosity—either share a pure domain-neutral primitive or keep them cleanly separate.
 
-4. **No Import Cycles, Private Imports Across Modules, or Domain Dependencies on Outer Layers (`模块循环依赖 = 0，严禁跨层引用私有文件`)**
+3. **No Import Cycles, Private Imports Across Modules, or Domain Dependencies on Outer Layers (`模块循环依赖 = 0，严禁跨层引用私有文件`)**
    - `REDLINE-CYCLE` (`[BLOCKER]`): Zero circular imports (`A -> B -> ... -> A`) across files, packages, or SQL views.
    - `REDLINE-BOUNDARY` (`[BLOCKER]`):
      - Zero cross-module imports into private/internal files (`/internal/`, `/_internal/`, `/private/`, `/impl/`, or Python cross-package `._module`). Always import from the target module's public facade/entrypoint.
@@ -72,7 +67,7 @@ Check every diff line for classic AI-generated noise:
   - Empty `catch {}`, `except: pass`, or log-and-return-null `catch` that hides failures silently.
   - Redundant `if (x == null)` / `x?.y?.z` checks on non-nullable types or guaranteed internal contracts.
 - **Type-Safety Evasion**: TypeScript `as any` / `: any` / `@ts-ignore`, Java `@SuppressWarnings("unchecked")` or raw types, Python bare `# type: ignore`.
-- **Deep Nesting (> 3 levels)**: Pyramid-of-doom `if/for` blocks that flatten trivially via early returns or `continue`.
+- **Unnecessary Nesting**: Pyramid-of-doom `if/for` blocks that flatten trivially via early returns or `continue` (never force artificial helper splits when cohesive flow is already clear).
 - **Style Drift**: Introducing a foreign naming convention, formatting style, or error-return pattern inconsistent with the surrounding module.
 
 ---
@@ -122,13 +117,12 @@ The reviewer subagent MUST respond using this structure in `Review` mode:
 - **Scope**: `<branch/diff/files>` (`N` files reviewed)
 - **Preflight**: `python preflight_scan.py` -> `<PASS/BLOCK, X blockers, Y warnings>`
 
-## 4 Hard Redlines Scorecard
+## 3 Hard Redlines Scorecard
 | Redline | Status | Count | Notes |
 | :--- | :---: | :---: | :--- |
-| 1. Single-Function Cognitive Complexity <= 15 | PASS/FAIL | N | ... |
-| 2. Zero Boolean Traps & Positional Params <= 4 | PASS/FAIL | N | ... |
-| 3. Newly Added Duplicate Code Blocks = 0 | PASS/FAIL | N | ... |
-| 4. No cycles, private imports across modules, or domain dependencies on outer layers | PASS/FAIL | N | ... |
+| 1. Zero Boolean Traps & Positional Params <= 4 | PASS/FAIL | N | ... |
+| 2. Newly Added Duplicate Code Blocks = 0 | PASS/FAIL | N | ... |
+| 3. No cycles, private imports across modules, or domain dependencies on outer layers | PASS/FAIL | N | ... |
 
 ## Findings (Ordered by Severity)
 - **[BLOCKER] `<RULE-OR-TASTE-TAG>`** `path/to/File.ext:42` — What is wrong and why it hurts maintainability.

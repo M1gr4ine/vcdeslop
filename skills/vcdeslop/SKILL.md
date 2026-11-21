@@ -5,10 +5,9 @@ description: >-
   quality checks, cleaning up AI-generated slop, or auditing maintainability
   (代码审查/Review/重构减负/去AI味自动触发). Orchestrates a deterministic polyglot
   preflight scan plus an isolated, same-model (`inherit`) subagent for double-blind
-  review across Java, JS/TS, SQL, Python, Go, and Rust—enforcing Cognitive
-  Complexity <= 15, zero Boolean Traps, positional params <= 4, zero duplicate
-  blocks, zero circular or private cross-module imports, tombstone dead-code reaping, and
-  mutation-test rigor.
+  review across Java, JS/TS, SQL, Python, Go, and Rust—enforcing zero Boolean
+  Traps, positional params <= 4, zero duplicate blocks, zero circular or private
+  cross-module imports, tombstone dead-code reaping, and mutation-test rigor.
 license: MIT
 metadata:
   version: "2.0.0"
@@ -17,7 +16,7 @@ metadata:
 
 # VCDeslop — Vibe Coding Deslop & Code Taste Reviewer
 
-Eliminate AI-generated slop and enforce human-maintainable engineering taste. Combines deterministic diff metrics, Cursor-style `deslop` cleanup, Karpathy/Ousterhout/Grug taste principles, dead-code tombstone reaping, mental mutation auditing, and four quantitative `[BLOCKER]` redlines—executed by an **isolated subagent at the exact same intelligence tier as the main session**.
+Eliminate AI-generated slop and enforce human-maintainable engineering taste. Combines deterministic diff metrics, Cursor-style `deslop` cleanup, Karpathy/Ousterhout/Grug taste principles, dead-code tombstone reaping, mental mutation auditing, and three quantitative `[BLOCKER]` redlines—executed by an **isolated subagent at the exact same intelligence tier as the main session**.
 
 ## When to Activate
 
@@ -41,7 +40,7 @@ python <skill_dir>/scripts/preflight_scan.py --path <repo_root> --mode diff
 
 Useful flags: `--base main`, `--mode staged`, `--mode all`, `--files a.java b.ts c.sql`, `--format json`, `--gate strict`. If Python is not installed, skip this script without error and rely on repo-native linters plus direct `git diff` analysis.
 
-If the target repository already configures native linters or architecture tests, run those targeted checks too (`eslint`, `jscpd`, `dependency-cruiser`, `knip`, `tach`, `complexipy`, `sqlfluff`, or `mvn`/`gradle` ArchUnit checks) so findings reflect real repo gates.
+If the target repository already configures native linters or architecture tests, run those targeted checks too (`eslint`, `jscpd`, `dependency-cruiser`, `knip`, `tach`, `sqlfluff`, or `mvn`/`gradle` ArchUnit checks) so findings reflect real repo gates.
 
 **Mid-task preflight**: After writing or substantially changing a non-trivial file, rerun `preflight_scan.py --mode diff` and fix redline hits immediately.
 
@@ -83,17 +82,16 @@ Provide the subagent with:
 ### Step 4: Synthesize Report or Apply Regression-Safe Cleanup
 
 1. **In Review Mode**:
-   - Present the **Verdict** (`PASS` / `CONCERNS` / `BLOCK`) and the **4-Redline Scorecard**.
+   - Present the **Verdict** (`PASS` / `CONCERNS` / `BLOCK`) and the **3-Redline Scorecard**.
    - List every `[BLOCKER]` and `[WARNING]` with exact `file:line`, principle violated, and a concrete minimal refactor snippet.
    - Include **Tombstone & Dead Code** observations and **Mental Mutation Test** gaps.
    - If the repo lacks automated enforcement, suggest 1–2 matching ecosystem tools from the playbook.
 2. **In Clean / Deslop Mode** (after review identifies targets):
    - **Lock with tests**: Verify existing tests pass before editing (or write focused behavior checks first).
-   - **Deletion-first surgical edits**: Strip obvious comments, dead orphans, abnormal defensive checks, Boolean Traps, deep nesting, clones, and shallow pass-through wrappers—touching only scoped code.
+   - **Deletion-first surgical edits**: Strip obvious comments, dead orphans, abnormal defensive checks, Boolean Traps, unnecessary nesting, clones, and shallow pass-through wrappers—touching only scoped code.
    - **Re-verify**: Re-run `preflight_scan.py` (confirm `0` blockers) and the project's test suite.
    - **Concise summary & Before/After delta**: Report scope cleaned and verification results in 1–3 crisp sentences, plus a descriptive delta line:
-     `Net LOC: ±N (+A / -B) | Max Cognitive Complexity: X -> Y | Blockers: M -> 0`
-     *(Treat `Net LOC` strictly as an observation—never cram control flow into dense one-liners/nested ternaries or skip named Options/DTO types just to chase negative line counts.)*
+     `Blockers: M -> 0 | Warnings: W -> V`
 
 ## Reference Index
 

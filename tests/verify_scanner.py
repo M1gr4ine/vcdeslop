@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -89,10 +90,12 @@ public class OrderSafe {
         (("REDLINE-BOOL-TRAP", "setVisible"), ("REDLINE-BOOL-TRAP", "processFlags")),
     )
     assert not any(f.file.endswith("OrderSafe.java") for f in findings)
+    java_lines = {f.rule_id: f.line for f in findings if f.rule_id in {"REDLINE-BOOL-TRAP", "REDLINE-PARAMS"}}
+    assert java_lines == {"REDLINE-BOOL-TRAP": 7, "REDLINE-PARAMS": 10}, java_lines
 
 
 def test_ts_fixtures() -> None:
-    """Verify TS complexity > 15, cycles, private import, `as any`, and intra-module exemptions."""
+    """Verify TS cycles, private import, `as any`, nested-function non-blocking, and exemptions."""
     billing_index = """import { SECRET } from './internal/secret';
 export function readFlags(flags: boolean[]): boolean[] { return flags; }
 export const PUBLIC_SECRET = SECRET;
@@ -128,18 +131,18 @@ export function handle(a: number, b: number, c: number, d: number): number {
     _assert_rules(
         findings,
         (
-            ("REDLINE-COMPLEXITY", "modA.ts", ""),
             ("REDLINE-CYCLE", "mod", ""),
             ("REDLINE-BOUNDARY", "modA.ts", ""),
             ("SLOP-TYPE-EVASION", "modA.ts", ""),
         ),
         (("REDLINE-BOOL-TRAP", "sendSafe"),),
     )
+    assert not any("handle" in f.message for f in findings)
     assert not any(f.file.endswith("billing/index.ts") for f in findings)
 
 
 def test_sql_fixtures() -> None:
-    """Verify SQL complexity, all 3 SQL smells, view cycles, and comment/RHS exemptions."""
+    """Verify all 3 SQL smells, injection blocker, view cycles, and comment/RHS exemptions."""
     bad_sql = """SELECT DISTINCT * FROM orders o JOIN users u ON u.id = o.user_id
 WHERE DATE(o.created_at) = '2026-01-01' AND o.tenant = ${tenantId}
   AND o.id IN (SELECT id FROM items WHERE qty > 0 AND (flag = 1 OR flag = 2)
@@ -156,18 +159,15 @@ WHERE DATE(o.created_at) = '2026-01-01' AND o.tenant = ${tenantId}
             "queries/v_b.sql": "CREATE VIEW v_b AS SELECT id FROM v_a;\n",
         }
     )
-    _assert_rules(
-        findings,
-        (
-            ("SLOP-SQL-INJECTION", "bad.sql", ""),
-            ("SLOP-SQL-SMELL", "bad.sql", "SELECT *"),
-            ("SLOP-SQL-SMELL", "bad.sql", "SELECT DISTINCT"),
-            ("SLOP-SQL-SMELL", "bad.sql", "Function wrapped"),
-            ("REDLINE-COMPLEXITY", "bad.sql", ""),
-            ("REDLINE-CYCLE", "queries/v_", ""),
-        ),
-        (),
+    expected = (
+        ("SLOP-SQL-INJECTION", "bad.sql", ""),
+        ("SLOP-SQL-SMELL", "bad.sql", "SELECT *"),
+        ("SLOP-SQL-SMELL", "bad.sql", "SELECT DISTINCT"),
+        ("SLOP-SQL-SMELL", "bad.sql", "Function wrapped"),
+        ("REDLINE-CYCLE", "queries/v_", ""),
     )
+    _assert_rules(findings, expected, ())
+    assert {f.rule_id for f in findings} == {"SLOP-SQL-INJECTION", "SLOP-SQL-SMELL", "REDLINE-CYCLE"}
     assert not any(f.file.endswith("clean.sql") for f in findings)
     sql_smells = {f.message: f.remedy for f in findings if f.rule_id == "SLOP-SQL-SMELL"}
     assert any("column names" in remedy for remedy in sql_smells.values())
@@ -178,13 +178,17 @@ WHERE DATE(o.created_at) = '2026-01-01' AND o.tenant = ${tenantId}
 
 
 def test_python_and_shell_rules() -> None:
-    """Verify Python AST complexity boundary (15 vs 16), cycles, boundaries, slop, and PowerShell metrics."""
-    blocks_15 = "".join(f"    if a > {i}:\n        if b > {i}:\n            return {i + 1}\n" for i in range(5))
-    blocks_16 = "".join(f"    for x_{i} in range(a):\n        if x_{i} > b:\n            return {i + 1}\n" for i in range(5))
+    """Verify Python cycles, boundaries, duplication, slop, PowerShell bool traps, and no LOC/complexity caps."""
+    deep_blocks = "".join(f"    for x_{i} in range(a):\n        if x_{i} > b:\n            return {i + 1}\n" for i in range(6))
     dup_body = "\n".join(f"    step_{i} = items[{i}] + {i + 1}" for i in range(12))
-    ps1_complex = """function Invoke-Deep {
+    ps1_src = """function Invoke-Deep {
   param([switch]$DryRun)
   if ($DryRun) { if ($true) { if ($true) { if ($true) { if ($true) { if ($true) { return } } } } } }
+}
+
+function Invoke-Flag {
+  param([string]$Name, [bool]$Hard)
+  Write-Output $Name
 }
 """
     worker_b = f"""def run_b(items):
@@ -205,15 +209,14 @@ def sync_good(src: str, flags: list[bool], *, dry_run: bool = False) -> None:
         files = {
             "pkg_a/mod_a.py": (
                 "from pkg_b import mod_b\nfrom pkg_b import _secret\n\n"
-                f"def score_15(a: int, b: int) -> int:\n{blocks_15}    return 0\n\n"
-                f"def score_16(a: int, b: int, c: int) -> int:\n{blocks_16}    if c:\n        return 9\n    return 0\n"
+                f"def deep_logic(a: int, b: int, c: int) -> int:\n{deep_blocks}    if c:\n        return 9\n    return 0\n"
             ),
             "pkg_b/mod_b.py": "from pkg_a import mod_a\n",
             "pkg_b/_secret.py": "TOKEN = 'x'\n",
             "pkg_dup/worker_a.py": f"def run_a(items):\n{dup_body}\n    return step_11\n",
             "pkg_dup/worker_b.py": worker_b,
-            "pkg_dup/giant.py": "\n".join(f"VALUE_{i} = {i}" for i in range(410)) + "\n",
-            "tools/deep.ps1": ps1_complex,
+            "pkg_dup/giant.py": "\n".join(f"VALUE_{i} = {i}" for i in range(450)) + "\n",
+            "tools/deep.ps1": ps1_src,
         }
         for rel, content in files.items():
             target = root / rel
@@ -224,27 +227,55 @@ def sync_good(src: str, flags: list[bool], *, dry_run: bool = False) -> None:
         _assert_rules(
             findings,
             (
-                ("REDLINE-COMPLEXITY", "mod_a.py", "score_16"),
                 ("REDLINE-CYCLE", "pkg_", ""),
                 ("REDLINE-BOUNDARY", "mod_a.py", ""),
                 ("REDLINE-DUPLICATION", "worker_", ""),
                 ("REDLINE-BOOL-TRAP", "worker_b.py", "dry_run"),
                 ("SLOP-SILENT-CATCH", "worker_b.py", ""),
                 ("SLOP-TYPE-EVASION", "worker_b.py", ""),
-                ("REDLINE-COMPLEXITY", "deep.ps1", "Invoke-Deep"),
+                ("REDLINE-BOOL-TRAP", "deep.ps1", "Invoke-Flag"),
             ),
-            (("REDLINE-COMPLEXITY", "score_15"), ("REDLINE-BOOL-TRAP", "sync_good"), ("REDLINE-BOOL-TRAP", "Invoke-Deep")),
+            (("REDLINE-BOOL-TRAP", "sync_good"), ("REDLINE-BOOL-TRAP", "Invoke-Deep")),
         )
+        assert not any("deep_logic" in f.message or "Invoke-Deep" in f.message for f in findings)
+        ps1_flag = next(f for f in findings if f.rule_id == "REDLINE-BOOL-TRAP" and "deep.ps1" in f.file)
+        assert ps1_flag.line == 6, ps1_flag
         assert sum(1 for f in findings if f.rule_id == "SLOP-TYPE-EVASION" and "worker_b.py" in f.file) == 1
 
         giant_findings = [f for f in findings if "giant.py" in f.file]
-        assert len(giant_findings) == 1 and giant_findings[0].severity == "WARNING"
-        with contextlib.redirect_stdout(io.StringIO()):
+        assert not giant_findings, f"Large files must not emit findings: {giant_findings}"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
             assert preflight_main(["--path", str(root), "--files", "pkg_dup/giant.py", "--gate", "strict"]) == 0
+        output = buf.getvalue()
+        assert "3 Hard Maintainability Redlines Scorecard" in output
+        assert "Cognitive Complexity" not in output
+
+        json_buf = io.StringIO()
+        with contextlib.redirect_stdout(json_buf):
+            assert preflight_main(["--path", str(root), "--mode", "all", "--format", "json", "--gate", "strict"]) == 1
+        payload = json.loads(json_buf.getvalue())
+        assert "hot_functions" not in payload and payload["verdict"] == "BLOCK" and payload["blockers"] > 0
+
+        md_buf = io.StringIO()
+        with contextlib.redirect_stdout(md_buf):
+            assert preflight_main(["--path", str(root), "--mode", "all", "--gate", "strict"]) == 1
+        md = md_buf.getvalue()
+        assert "| 1. Zero Boolean Traps & Positional Params <= 4 | FAIL | 2 |" in md
+        assert "| 2. Newly Added Duplicate Code Blocks = 0 | FAIL | 1 |" in md
+        assert "| 3. No cycles, private imports across modules, or domain dependencies on outer layers | FAIL | 2 |" in md
+
+        ps1_buf = io.StringIO()
+        with contextlib.redirect_stdout(ps1_buf):
+            assert preflight_main(["--path", str(root), "--files", "tools/deep.ps1", "--gate", "strict"]) == 1
+        ps1_md = ps1_buf.getvalue()
+        assert "| 1. Zero Boolean Traps & Positional Params <= 4 | FAIL | 1 |" in ps1_md
+        assert "| 2. Newly Added Duplicate Code Blocks = 0 | PASS | 0 |" in ps1_md
+        assert "| 3. No cycles, private imports across modules, or domain dependencies on outer layers | PASS | 0 |" in ps1_md
 
 
 def test_accuracy_regressions() -> None:
-    """Lock callback-type bool exemptions, lazy-import cycles, lambda nesting, and AST silent-catch detection."""
+    """Lock callback-type bool exemptions, lazy-import cycles, nested-lambda allowance, and AST silent-catch detection."""
     deep_ts = (
         "export function deep(xs: number[][]): number {\n  let n = 0;\n  xs.forEach((row) => {\n"
         "    row.forEach((v) => {\n      if (v > 0) {\n        if (v > 1) {\n          if (v > 2) {\n"
@@ -276,12 +307,12 @@ def test_accuracy_regressions() -> None:
         findings,
         (
             ("REDLINE-BOOL-TRAP", "web/flag.ts", "compact"),
-            ("REDLINE-COMPLEXITY", "web/deep.ts", "deep"),
             ("REDLINE-CYCLE", "eager/", ""),
             ("SLOP-SILENT-CATCH", "errs/io.py", ""),
         ),
         (("REDLINE-BOOL-TRAP", "onDone"), ("REDLINE-BOOL-TRAP", "Run"), ("REDLINE-CYCLE", "tc/"), ("REDLINE-CYCLE", "lazy/")),
     )
+    assert not any(f.file.endswith("web/deep.ts") for f in findings)
     silent = [f for f in findings if f.rule_id == "SLOP-SILENT-CATCH"]
     assert [f.line for f in silent] == [13], f"Only the broad log-and-return handler should fire, got {silent}"
 

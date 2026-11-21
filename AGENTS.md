@@ -22,7 +22,7 @@ vcdeslop/
 │   │   └── harness-adapters.md      # Same-model (`inherit`) subagent spawn rules
 │   └── scripts/
 │       ├── preflight_scan.py        # CLI entrypoint (zero external dependencies)
-│       └── analyzers/               # Modular DAG: models / lexers -> metrics_brace / git_scope -> complexity_params / clones_slop / graph_boundaries
+│       └── analyzers/               # Modular DAG: models / lexers -> git_scope -> clones_slop / graph_boundaries (+ params)
 ├── adapters/
 │   ├── hooks/                       # Native OS lifecycle hooks (`vcdeslop-hook.ps1`/`.cmd` & `vcdeslop-hook`)
 │   ├── claude/ & antigravity/       # Harness subagent presets
@@ -49,18 +49,16 @@ vcdeslop/
    - `skills/vcdeslop/scripts/` MUST use Python 3.10+ standard library only—no third-party pip dependencies—while installers (`scripts/install.ps1`, `scripts/install.sh`) and hooks (`adapters/hooks/`) MUST NOT require Python at all.
 5. **Dogfooding Self-Governance (Eat Our Own Dogfood)**:
    - Every code file in this repository MUST pass `python skills/vcdeslop/scripts/preflight_scan.py --path . --mode all --gate strict` with **0 blockers and 0 warnings**:
-     - File LOC `<= 400` (advisory warning; never a hard blocker)
-     - Function Cognitive Complexity `<= 15` (target `<= 10`)
      - Positional parameters `<= 4` and **0 Boolean Trap parameters** (use `@dataclass(frozen=True)` options or Python `*` keyword-only booleans)
      - Duplicate normalized code blocks `= 0`
      - Module circular dependencies `= 0` and zero private cross-module imports
    - Keep `skills/vcdeslop/scripts/analyzers/` strictly acyclic (DAG):
-     `models` / `lexers` <- `metrics_brace` / `git_scope` <- `complexity_params` / `clones_slop` / `graph_boundaries` <- `__init__`.
+     `models` / `lexers` <- `git_scope` <- `clones_slop` / `graph_boundaries` (and `models` / `lexers` <- `params`) <- `__init__`.
    - Rule severities and remedies live in one catalog (`models.RULES`); build findings with `make_finding(...)` instead of repeating severity/remedy strings.
 
 ## 3. Extending Rules & Language Support
 
-- **Adding a new complexity or parameter rule**: Brace languages + PowerShell live in `analyzers/metrics_brace.py`; Python/SQL/shell metrics and the finding translation live in `analyzers/complexity_params.py`. Keep language-specific patterns table-driven.
+- **Adding a new parameter or Boolean-trap rule**: Language signature parsers (Python AST, brace languages, PowerShell) and finding translation live in `analyzers/params.py`. Keep language-specific patterns table-driven.
 - **Adding a new slop/SQL check**: Add a `_SlopSpec` entry in `skills/vcdeslop/scripts/analyzers/clones_slop.py` and document the refactor pattern in `skills/vcdeslop/references/language-playbooks.md`.
 - **Adding boundary rules**: Extend layer sets or import parsers in `skills/vcdeslop/scripts/analyzers/graph_boundaries.py`.
 - **Every new rule MUST include a positive violation fixture AND a false-positive exemption case** in `tests/verify_scanner.py`.

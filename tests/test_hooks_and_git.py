@@ -47,15 +47,9 @@ def test_shell_lf_line_endings() -> None:
 
 def test_git_diff_scope() -> None:
     """Verify diff mode works under a `build/` ancestor dir and scopes strictly to changed lines."""
-    legacy_complex = (
-        "def legacy_fn(a: int, b: int, c: int) -> int:\n"
-        "    if a > 0:\n"
-        "        for i in range(a):\n"
-        "            if i > b:\n"
-        "                while c > 0:\n"
-        "                    if c > 1:\n"
-        "                        return 1\n"
-        "    return 0\n"
+    legacy_params = (
+        "def legacy_fn(a: int, b: int, c: int, d: int, e: int) -> int:\n"
+        "    return a + b + c + d + e\n"
     )
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp) / "build" / "repo"
@@ -64,18 +58,20 @@ def test_git_diff_scope() -> None:
         _run_git(repo, "config", "user.email", "test@acme.io")
         _run_git(repo, "config", "user.name", "VCDeslop Test")
         app = repo / "app.py"
-        app.write_text(legacy_complex, encoding="utf-8")
+        app.write_text(legacy_params, encoding="utf-8")
         _run_git(repo, "add", "app.py")
         _run_git(repo, "commit", "-m", "initial")
 
         app.write_text(
-            legacy_complex + "\ndef bad_flag(x: bool = True) -> bool:\n    return x\n",
+            legacy_params + "\ndef bad_flag(x: bool = True) -> bool:\n    return x\n",
             encoding="utf-8",
         )
-        report = run_scan(ScanOptions(root=repo, scan_mode="diff"))
-        assert report.scanned_files == 1, f"Expected 1 scanned file under build/repo, got {report.scanned_files}"
-        assert any(f.rule_id == "REDLINE-BOOL-TRAP" and "bad_flag" in f.message for f in report.findings)
-        assert not any(f.rule_id == "REDLINE-COMPLEXITY" and "legacy_fn" in f.message for f in report.findings)
+        diff_report = run_scan(ScanOptions(root=repo, scan_mode="diff"))
+        assert diff_report.scanned_files == 1, f"Expected 1 scanned file under build/repo, got {diff_report.scanned_files}"
+        assert any(f.rule_id == "REDLINE-BOOL-TRAP" and "bad_flag" in f.message for f in diff_report.findings)
+        assert not any(f.rule_id == "REDLINE-PARAMS" and "legacy_fn" in f.message for f in diff_report.findings)
+        all_report = run_scan(ScanOptions(root=repo, scan_mode="all"))
+        assert any(f.rule_id == "REDLINE-PARAMS" and "legacy_fn" in f.message for f in all_report.findings)
 
 
 def _assert_antigravity_hook(cmd: list[str] | str) -> None:

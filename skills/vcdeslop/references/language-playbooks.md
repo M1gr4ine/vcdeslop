@@ -47,7 +47,7 @@ Concrete `Slop -> High-Taste` refactors and deterministic repo tools organized b
 
 #### Recommended Java Repo Gates
 - **Architecture**: `ArchUnit` (`TNG/ArchUnit`) locking `Controller -> Service -> Repository` and forbidding cycles (`slices().matching(...).should().beFreeOfCycles()`).
-- **Complexity & Static**: `PMD` (`CognitiveComplexity` rule <= 15), `SpotBugs`, `ErrorProne`.
+- **Static Analysis**: `PMD`, `SpotBugs`, `ErrorProne`.
 - **Mutation Testing**: `Pitest` (`org.pitest:pitest-maven` / `gradle-pitest-plugin`) on core domain services.
 
 ---
@@ -82,7 +82,7 @@ Concrete `Slop -> High-Taste` refactors and deterministic repo tools organized b
    - Flag nested JSX ternaries (`a ? (b ? <X/> : <Y/>) : <Z/>`) -> early returns or extracted sub-components.
 
 #### Recommended JS/TS Repo Gates
-- **Complexity & Slop**: `eslint-plugin-sonarjs` (`sonarjs/cognitive-complexity: ["error", 15]`), `eslint-plugin-slop` / `eslint-plugin-no-comment-slop`.
+- **Slop & Linting**: `eslint-plugin-slop` / `eslint-plugin-no-comment-slop`.
 - **Duplication**: `jscpd` (`--threshold 0` on new PRs).
 - **Architecture & Dead Code**: `dependency-cruiser` (cycles + layer/internal guards) + `knip` (unused files/exports/deps).
 - **Mutation Testing**: `Stryker` (`@stryker-mutator/core`).
@@ -92,7 +92,7 @@ Concrete `Slop -> High-Taste` refactors and deterministic repo tools organized b
 ### 3. SQL (MySQL / PostgreSQL / MyBatis / Migrations)
 
 #### Common AI Slop & Anti-Patterns
-1. **Cognitive Complexity > 15 (Subquery & Nested `CASE` Pyramids)**:
+1. **Nested Subquery & `CASE` Pyramids**:
    ```sql
    -- ❌ Slop: Deeply nested correlated subqueries & nested CASE
    SELECT u.id, (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id AND o.status = 'PAID')
@@ -135,16 +135,16 @@ Concrete `Slop -> High-Taste` refactors and deterministic repo tools organized b
 ### 4. Python
 - **Boolean Traps & Configs**: Enforce keyword-only booleans via `*` (`def sync_items(src: Path, *, dry_run: bool = False):`) or `@dataclass(frozen=True)` options objects. Never pass positional `bool` switches.
 - **Type Evasion & Silent Catches**: Flag `dict[str, Any]` bags crossing module boundaries, bare `# type: ignore` without `[error-code]`, and `except Exception: pass` / `return None`.
-- **Tools**: `rohaquinlop/complexipy` (Cognitive Complexity <= 15), `tach-org/tach` (module boundaries & zero cycles), `vulture` (dead code), `mutmut` (mutation tests).
+- **Tools**: `tach-org/tach` (module boundaries & zero cycles), `vulture` (dead code), `mutmut` (mutation tests).
 
 ### 5. Go
 - **Error Discipline & Interfaces**: Flag `_ = err` or swallowed errors without `fmt.Errorf("...: %w", err)` context; define interfaces at the **consumer** package rather than Java-style producer `IService` interfaces.
 - **Package Boundaries**: Avoid `utils/` or `common/` dumping grounds that cause import cycles; keep internal helpers in `internal/`.
-- **Tools**: `golangci-lint` (enable `gocognit` <= 15, `wrapcheck`, `forbidigo`).
+- **Tools**: `golangci-lint` (enable `wrapcheck`, `forbidigo`).
 
 ### 6. Rust
 - **Safety & Abstraction Slop**: Flag `.unwrap()` / `.expect()` outside tests/CLI entrypoints, gratuitous `.clone()` to appease the borrow checker instead of borrowing `&T`, and unnecessary `Box<dyn Trait>` where a small `enum` suffices.
-- **Tools**: `cargo clippy -- -W clippy::cognitive_complexity`.
+- **Tools**: `cargo clippy`.
 
 ### 7. Shell / PowerShell
 - **Silent Failure Traps**: Flag `|| true`, `2>/dev/null` hiding real command errors, `-ErrorAction SilentlyContinue` on destructive/state-changing commands, missing `set -euo pipefail` (Bash) or `$ErrorActionPreference = 'Stop'` (PowerShell), and unquoted `$VAR` expansions.

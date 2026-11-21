@@ -51,10 +51,9 @@ def _additional_gate_label(findings: list[Finding]) -> str:
 def render_markdown(report: ScanReport) -> str:
     """Format ScanReport as a compact Markdown scorecard and findings list."""
     verdict, blockers, warnings = _summarize_verdict(report.findings)
-    c1 = _count_rules(report.findings, ("REDLINE-COMPLEXITY",))
-    c2 = _count_rules(report.findings, ("REDLINE-BOOL-TRAP", "REDLINE-PARAMS"))
-    c3 = _count_rules(report.findings, ("REDLINE-DUPLICATION",))
-    c4 = _count_rules(report.findings, ("REDLINE-CYCLE", "REDLINE-BOUNDARY"))
+    c1 = _count_rules(report.findings, ("REDLINE-BOOL-TRAP", "REDLINE-PARAMS"))
+    c2 = _count_rules(report.findings, ("REDLINE-DUPLICATION",))
+    c3 = _count_rules(report.findings, ("REDLINE-CYCLE", "REDLINE-BOUNDARY"))
     additional = [f for f in report.findings if f.rule_id.startswith(("SLOP-", "ADVISORY-"))]
     additional_gate = _additional_gate_label(additional)
 
@@ -63,13 +62,12 @@ def render_markdown(report: ScanReport) -> str:
         "",
         f"- **Verdict**: `{verdict}` | **Mode**: `{report.mode}` | **Scoped Files**: {report.scanned_files} | **Blockers**: {blockers} | **Warnings**: {warnings}",
         "",
-        "## 4 Hard Maintainability Redlines Scorecard",
+        "## 3 Hard Maintainability Redlines Scorecard",
         "| Redline | Gate | Findings |",
         "| :--- | :--- | :---: |",
-        f"| 1. Single-Function Cognitive Complexity <= 15 | {'FAIL' if c1 else 'PASS'} | {c1} |",
-        f"| 2. Zero Boolean Traps & Positional Params <= 4 | {'FAIL' if c2 else 'PASS'} | {c2} |",
-        f"| 3. Newly Added Duplicate Code Blocks = 0 | {'FAIL' if c3 else 'PASS'} | {c3} |",
-        f"| 4. No cycles, private imports across modules, or domain dependencies on outer layers | {'FAIL' if c4 else 'PASS'} | {c4} |",
+        f"| 1. Zero Boolean Traps & Positional Params <= 4 | {'FAIL' if c1 else 'PASS'} | {c1} |",
+        f"| 2. Newly Added Duplicate Code Blocks = 0 | {'FAIL' if c2 else 'PASS'} | {c2} |",
+        f"| 3. No cycles, private imports across modules, or domain dependencies on outer layers | {'FAIL' if c3 else 'PASS'} | {c3} |",
         f"| + AI Slop / SQL Smells / Advisory Warnings | {additional_gate} | {len(additional)} |",
         "",
     ]
@@ -79,18 +77,6 @@ def render_markdown(report: ScanReport) -> str:
         for f in report.findings:
             loc = f"{f.file}:{f.line}" if f.line == f.end_line else f"{f.file}:{f.line}-{f.end_line}"
             lines.append(f"- **[{f.severity}] `{f.rule_id}`** `{loc}` — {f.message} *Fix:* {f.remedy}")
-        lines.append("")
-
-    if report.hot_functions:
-        lines.extend(
-            [
-                "## Top Functions by Cognitive Complexity",
-                "| Function | Location | Cognitive Complexity | Positional Params |",
-                "| :--- | :--- | :---: | :---: |",
-            ]
-        )
-        for m in report.hot_functions[:10]:
-            lines.append(f"| `{m.name}` | `{m.file}:{m.line}` | {m.cognitive_complexity} | {m.positional_params} |")
         lines.append("")
 
     return "\n".join(lines)
@@ -106,7 +92,6 @@ def render_json(report: ScanReport) -> str:
         "blockers": blockers,
         "warnings": warnings,
         "findings": [asdict(f) for f in report.findings],
-        "hot_functions": [asdict(m) for m in report.hot_functions],
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
 

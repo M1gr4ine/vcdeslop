@@ -50,9 +50,7 @@ class ScanOptions:
     base_ref: str | None = None
     scan_mode: str = "diff"
     explicit_files: tuple[Path, ...] = ()
-    max_cognitive_complexity: int = 15
     max_positional_params: int = 4
-    warn_file_lines: int = 400
     min_clone_lines: int = 10
 
 
@@ -79,9 +77,6 @@ class Rule:
 
 
 RULES: dict[str, Rule] = {
-    "REDLINE-COMPLEXITY": Rule(
-        "BLOCKER", "Flatten nesting with guard clauses, extract cohesive helpers, or replace nested SQL with WITH CTEs."
-    ),
     "REDLINE-PARAMS": Rule("BLOCKER", "Group parameters into a named Record/DTO/Options object or dataclass."),
     "REDLINE-BOOL-TRAP": Rule(
         "BLOCKER", "Split into separate explicit functions, use an Enum/literal mode, or pass named options."
@@ -111,9 +106,6 @@ RULES: dict[str, Rule] = {
     'SLOP-TS-IGNORE': Rule('WARNING', 'Fix the type or replace with `@ts-expect-error` + rationale.', 'SLOP-TYPE-EVASION'),
     'SLOP-JAVA-SUPPRESS': Rule('WARNING', 'Use explicit generic types or bounded type tokens.', 'SLOP-TYPE-EVASION'),
     'SLOP-PY-SILENT': Rule('WARNING', 'Let the error propagate, re-raise with context, or handle the specific failure at an I/O boundary.', 'SLOP-SILENT-CATCH'),
-    "SLOP-FILE-SIZE": Rule(
-        "WARNING", "Verify responsibilities remain a cohesive deep module; do not split into shallow pass-through wrappers."
-    ),
 }
 
 
@@ -124,23 +116,9 @@ def make_finding(rule_id: str, file: str, lines: tuple[int, int], message: str) 
 
 
 @dataclass(frozen=True)
-class FunctionMetric:
-    """Per-function complexity and parameter metrics for hot-spot reporting."""
-
-    file: str
-    name: str
-    line: int
-    end_line: int
-    cognitive_complexity: int
-    positional_params: int
-    bool_flag_params: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class ScanReport:
     """Aggregated preflight report across all scoped files."""
 
     mode: str
     scanned_files: int
     findings: tuple[Finding, ...]
-    hot_functions: tuple[FunctionMetric, ...]
