@@ -1,5 +1,0 @@
-## Code Taste & Automatic Review Gate
-- Keep new/edited code clean: zero Boolean flag parameters (except trivial `setXxx(bool)`), positional params <= 4, zero duplicate blocks, zero import cycles, cross-module private imports or domain dependencies on outer layers, no swallowed catches or `any` bypasses.
-- **Auto-Trigger Review**: Whenever asked to review code, inspect a PR/branch/diff, or audit quality/deslop changes, activate the `vcdeslop` skill, run its `preflight_scan.py`, and delegate the review to an **isolated (`spawn`, never `fork`), same-model (`inherit`) subagent** (never downgrade to `haiku`/`flash`/`flash_lite`/`mini`/`Explore`).
-- **Implementation Flow**: mid-task after non-trivial edits, run `preflight_scan.py --mode diff` (if Python exists) and fix redlines immediately; when code and tests are complete, activate `vcdeslop` and spawn the `inherit` reviewer in the same turn as build/test and resolve both before committing (never commit first and review afterwards).
-- **Round Closure**: once a review round is accepted, commit/push/install/release requests do not trigger a new review; re-review only the delta since acceptance, in `Verify` mode.

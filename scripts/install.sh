@@ -5,8 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_SRC="$REPO_ROOT/skills/vcdeslop"
 CLAUDE_AGENT_SRC="$REPO_ROOT/adapters/claude/agents/vcdeslop-reviewer.md"
-HOOK_BIN="$REPO_ROOT/adapters/hooks/vcdeslop-hook"
-RULE_SNIPPET="$REPO_ROOT/adapters/rules/global-review-gate.md"
+AGY_AGENT_SRC="$REPO_ROOT/adapters/antigravity/agents/vcdeslop-reviewer.md"
 STAMP="$(date +%Y%m%d%H%M%S)"
 
 HOME_DIR="$HOME"
@@ -41,12 +40,6 @@ hook_json_path() {
   printf '%s/.%s/%s' "$HOME_DIR" "$target" "$file"
 }
 
-require_jq() {
-  command -v jq >/dev/null 2>&1 && return 0
-  echo "Error: jq is required for $1; install jq before proceeding." >&2
-  return 1
-}
-
 resolve_hook_path() {
   local path="$1" link hops=0
   while [[ -L "$path" ]]; do
@@ -60,47 +53,6 @@ resolve_hook_path() {
   done
   printf '%s' "$path"
 }
-
-validate_hook_json() {
-  local dest="$1" resolved="$1"
-  if [[ -L "$dest" && ! -f "$dest" ]]; then
-    echo "Error: dangling or invalid hook JSON symlink: $dest; no changes made." >&2
-    return 1
-  fi
-  [[ -L "$dest" ]] && resolved="$(resolve_hook_path "$dest")"
-  [[ -f "$dest" ]] || return 0
-  if ! jq -se '
-    length == 1 and (.[0] | type == "object" and
-      ((.hooks // {}) | type == "object") and
-      ((.hooks.UserPromptSubmit // []) | type == "array"))
-  ' "$resolved" >/dev/null; then
-    echo "Error: invalid hook JSON in $dest; no changes made." >&2
-    return 1
-  fi
-}
-
-preflight_hook_target() {
-  local target="$1" dest
-  if [[ "$target" == "antigravity" && "$ACTION" == "install" ]]; then
-    require_jq "the Antigravity hook"
-    return
-  fi
-  [[ "$target" =~ ^(claude|codex|dsh|cursor)$ ]] || return 0
-  dest="$(hook_json_path "$target")"
-  [[ -f "$dest" || -L "$dest" || ( "$target" != "cursor" && "$ACTION" == "install" ) ]] || return 0
-  require_jq "hook JSON updates"
-  validate_hook_json "$dest"
-}
-
-preflight_hook_json() {
-  local target
-  for target in "${TARGETS[@]}"; do
-    preflight_hook_target "$target"
-  done
-}
-
-preflight_hook_json
-[[ -f "$HOOK_BIN" && "$RUN_MODE" == "apply" ]] && chmod +x "$HOOK_BIN"
 
 backup_dest() {
   local orig="$1" rel tag dest
@@ -185,14 +137,20 @@ write_with_backup() {
   echo "Updated: $dest"
 }
 
-merge_hook_json() {
-  local dest="$1" cmd="$2" operation="$3" tmp input="/dev/null" write_dest
+remove_legacy_hook_json() {
+  local harness="$1" dest write_dest tmp
+  dest="$(hook_json_path "$harness")"
+  [[ -f "$dest" ]] || return 0
+  grep -q 'vcdeslop-hook' "$dest" || return 0
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Warning: jq not found; please remove legacy vcdeslop-hook entries from $dest manually." >&2
+    return 0
+  fi
+  if [[ "$RUN_MODE" == "dry-run" ]]; then echo "[DRY-RUN] Clean legacy hook: $dest"; return 0; fi
   write_dest="$(resolve_hook_path "$dest")"
-  [[ -f "$dest" ]] && input="$write_dest"
-  mkdir -p "$(dirname "$write_dest")"
   tmp="$(mktemp "${write_dest}.tmp.XXXXXX")"
-  [[ -f "$dest" ]] && cp -p "$write_dest" "$tmp"
-  if ! jq -s --arg cmd "$cmd" --arg operation "$operation" '
+  cp -p "$write_dest" "$tmp"
+  if ! jq -s '
     def script_path:
       "(?:\u0022(?:[^\u0022]*[/\\\\])?vcdeslop-hook(?:\\.ps1|\\.cmd)?\u0022|" +
       "\u0027(?:[^\u0027]*[/\\\\])?vcdeslop-hook(?:\\.ps1|\\.cmd)?\u0027|" +
@@ -209,41 +167,33 @@ merge_hook_json() {
       else . end);
     (if length == 0 then {} else .[0] end) | . as $original |
     if .hooks.UserPromptSubmit != null then .hooks.UserPromptSubmit |= cleaned else . end |
-    if $operation == "install" then
-      .hooks = (.hooks // {}) |
-      .hooks.UserPromptSubmit = ((.hooks.UserPromptSubmit // []) +
-        [{matcher:"",hooks:[{type:"command",command:$cmd,timeout:5}]}])
-    elif (($original.hooks.UserPromptSubmit? // []) | length > 0) and
-         (.hooks.UserPromptSubmit? | type == "array" and length == 0) then
+    if (($original.hooks.UserPromptSubmit? // []) | length > 0) and
+       (.hooks.UserPromptSubmit? | type == "array" and length == 0) then
       del(.hooks.UserPromptSubmit) | if (.hooks | length) == 0 then del(.hooks) else . end
     else . end
-  ' < "$input" > "$tmp"; then
+  ' < "$write_dest" > "$tmp"; then
     rm -f "$tmp"
     return 1
   fi
-  if [[ -f "$dest" ]] && jq -se 'length == 2 and .[0] == .[1]' "$write_dest" "$tmp" >/dev/null; then
+  if jq -se 'length == 2 and .[0] == .[1]' "$write_dest" "$tmp" >/dev/null; then
     rm -f "$tmp"
     return 0
   fi
-  if [[ -f "$dest" ]]; then cp "$write_dest" "$(backup_dest "$dest")"; fi
+  cp "$write_dest" "$(backup_dest "$dest")"
   mv "$tmp" "$write_dest"
   echo "Updated: $dest"
 }
 
-update_hook_json() {
-  local harness="$1" dir="$2" dest cmd operation="$ACTION"
-  dest="$(hook_json_path "$harness")"
-  cmd="\"$HOOK_BIN\" $harness"
-  [[ "$harness" == "cursor" ]] && operation="uninstall"
-  [[ "$operation" == "uninstall" && ! -f "$dest" ]] && return 0
-  if [[ "$RUN_MODE" == "dry-run" ]]; then echo "[DRY-RUN] Update hook ($operation): $dest"; return 0; fi
-  merge_hook_json "$dest" "$cmd" "$operation"
-}
-
-remove_rule_gate() {
-  local harness="$1" dest="$2" stripped="$3"
-  [[ ! -f "$dest" ]] && return 0
-  local body="$stripped"
+remove_legacy_rule_gate() {
+  local harness="$1" dir="$2" rel="AGENTS.md"
+  [[ "$harness" == "claude" ]] && rel="CLAUDE.md"
+  [[ "$harness" == "cursor" ]] && rel="rules/vcdeslop-gate.mdc"
+  local dest="$dir/$rel" raw stripped body
+  [[ -f "$dest" ]] || return 0
+  raw="$(cat "$dest")"
+  grep -q 'VCDESLOP-AUTO-GATE:START' <<< "$raw" || return 0
+  stripped="$(printf '%s\n' "$raw" | awk '/<!-- VCDESLOP-AUTO-GATE:START -->/{skip=1;next} /<!-- VCDESLOP-AUTO-GATE:END -->/{skip=0;next} !skip{print}')"
+  body="$stripped"
   if [[ "$harness" == "cursor" ]]; then
     body="$(printf '%s\n' "$stripped" | sed '/^---$/d; /^description:/d; /^alwaysApply:/d')"
   fi
@@ -254,27 +204,6 @@ remove_rule_gate() {
   fi
 }
 
-update_rule_gate() {
-  local harness="$1" dir="$2" rel="AGENTS.md"
-  [[ "$harness" == "claude" ]] && rel="CLAUDE.md"
-  [[ "$harness" == "cursor" ]] && rel="rules/vcdeslop-gate.mdc"
-  local dest="$dir/$rel" raw="" stripped=""
-  [[ -f "$dest" ]] && raw="$(cat "$dest")"
-  stripped="$(printf '%s\n' "$raw" | awk '/<!-- VCDESLOP-AUTO-GATE:START -->/{skip=1;next} /<!-- VCDESLOP-AUTO-GATE:END -->/{skip=0;next} !skip{print}')"
-  if [[ "$ACTION" == "uninstall" ]]; then
-    remove_rule_gate "$harness" "$dest" "$stripped"
-    return 0
-  fi
-  local block="<!-- VCDESLOP-AUTO-GATE:START -->"$'\n'"$(cat "$RULE_SNIPPET")"$'\n'"<!-- VCDESLOP-AUTO-GATE:END -->"$'\n'
-  if [[ "$harness" == "cursor" && -z "${stripped//[[:space:]]/}" ]]; then
-    write_with_backup "$dest" $'---\ndescription: VCDeslop code taste & review gate\nalwaysApply: true\n---\n\n'"$block"
-  elif [[ -z "${stripped//[[:space:]]/}" ]]; then
-    write_with_backup "$dest" "$block"
-  else
-    write_with_backup "$dest" "${stripped}"$'\n\n'"$block"
-  fi
-}
-
 sync_antigravity_plugin() {
   local agy_dest="$HOME_DIR/.gemini/config/plugins/vcdeslop"
   if [[ "$ACTION" == "uninstall" ]]; then
@@ -282,22 +211,8 @@ sync_antigravity_plugin() {
     return 0
   fi
   backup_existing "$agy_dest" || return 0
-  local pairs=(
-    "plugin.json:plugin.json"
-    "hooks.json:hooks.json"
-    "rules/AGENTS.md:rules/AGENTS.md"
-    "adapters/antigravity/agents/vcdeslop-reviewer.md:agents/vcdeslop-reviewer.md"
-    "adapters/hooks/vcdeslop-hook:adapters/hooks/vcdeslop-hook"
-    "adapters/hooks/vcdeslop-hook.cmd:adapters/hooks/vcdeslop-hook.cmd"
-    "adapters/hooks/vcdeslop-hook.ps1:adapters/hooks/vcdeslop-hook.ps1"
-  )
-  local pair src_rel dst_rel
-  for pair in "${pairs[@]}"; do
-    src_rel="${pair%%:*}"
-    dst_rel="${pair#*:}"
-    sync_entry "file" "$REPO_ROOT/$src_rel" "$agy_dest/$dst_rel"
-  done
-  [[ "$RUN_MODE" == "apply" && -f "$agy_dest/adapters/hooks/vcdeslop-hook" ]] && chmod +x "$agy_dest/adapters/hooks/vcdeslop-hook"
+  sync_entry "file" "$REPO_ROOT/plugin.json" "$agy_dest/plugin.json"
+  sync_entry "file" "$AGY_AGENT_SRC" "$agy_dest/agents/vcdeslop-reviewer.md"
   sync_entry "dir" "$SKILL_SRC" "$agy_dest/skills/vcdeslop"
 }
 
@@ -312,14 +227,13 @@ for target in "${TARGETS[@]}"; do
     claude)
       sync_entry "dir" "$SKILL_SRC" "$HOME_DIR/.claude/skills/vcdeslop"
       sync_entry "file" "$CLAUDE_AGENT_SRC" "$HOME_DIR/.claude/agents/vcdeslop-reviewer.md"
-      update_hook_json "claude" "$HOME_DIR/.claude"
-      update_rule_gate "claude" "$HOME_DIR/.claude"
+      remove_legacy_hook_json "claude"
+      remove_legacy_rule_gate "claude" "$HOME_DIR/.claude"
       ;;
     codex|dsh|cursor)
       sync_entry "dir" "$SKILL_SRC" "$HOME_DIR/.$target/skills/vcdeslop"
-      # Cursor uses the rule gate; clean obsolete hooks during install and uninstall.
-      update_hook_json "$target" "$HOME_DIR/.$target"
-      update_rule_gate "$target" "$HOME_DIR/.$target"
+      remove_legacy_hook_json "$target"
+      remove_legacy_rule_gate "$target" "$HOME_DIR/.$target"
       ;;
     antigravity) sync_antigravity_plugin ;;
   esac

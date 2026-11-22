@@ -1,14 +1,14 @@
 {
   "name": "vcdeslop",
   "displayName": "VCDeslop",
-  "version": "2.0.0",
-  "description": "Cross-agent code review, AI-slop cleanup, and maintainability gate enforcing zero Boolean Traps, positional params <= 4, zero duplicate code blocks, and zero import cycles and cross-module private imports via an isolated same-model (inherit) subagent.",
+  "version": "3.0.0",
+  "description": "Built-in Review Agent prompt and opt-in review/deslop skill focused on real bugs, architecture depth, dead-code reaping, and test substance—without programmatic gates, hooks, or numeric quotas.",
   "author": {
     "name": "VCDeslop Contributors"
   },
   "suggestedPrompts": [
-    "Review my branch diff against main using the vcdeslop subagent",
-    "Clean up AI-generated slop, dead code, and Boolean traps in modified files",
-    "Audit Java, JS/TS, and SQL changes against the 3 maintainability redlines"
+    "Review my branch diff against main using vcdeslop-reviewer",
+    "Audit recent changes for real bugs, dead code, and weak tests",
+    "Clean up AI-generated slop in the modified files"
   ]
 }

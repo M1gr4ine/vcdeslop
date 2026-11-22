@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Native Windows PowerShell installer/uninstaller for vcdeslop across Claude Code, Codex, DSH, Antigravity, and Cursor.
+Native Windows PowerShell installer/uninstaller for vcdeslop (Review Agent preset & opt-in skill only; never installs hooks or global coding rules).
 #>
 [CmdletBinding()]
 param(
@@ -19,8 +19,6 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $SkillSrc = Join-Path $RepoRoot "skills\vcdeslop"
 $ClaudeAgentSrc = Join-Path $RepoRoot "adapters\claude\agents\vcdeslop-reviewer.md"
 $AgyAgentSrc = Join-Path $RepoRoot "adapters\antigravity\agents\vcdeslop-reviewer.md"
-$HookScript = Join-Path $RepoRoot "adapters\hooks\vcdeslop-hook.ps1"
-$RuleSnippetPath = Join-Path $RepoRoot "adapters\rules\global-review-gate.md"
 $Stamp = Get-Date -Format "yyyyMMddHHmmss"
 $BackupRoot = Join-Path $HomeDir ".vcdeslop-backups\$Stamp"
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -145,8 +143,15 @@ function Backup-ExistingTarget {
         Write-Warning "Skipping existing target (re-run with -Force to back up and replace): $DestPath"
         return $false
     }
+    $Item = Get-Item -LiteralPath $DestPath -Force
+    if ($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        if ($DryRun) { Write-Log "[DRY-RUN] Unlink junction: $DestPath"; return $true }
+        Remove-InstalledPath -DestPath $DestPath
+        return $true
+    }
     $BackupPath = Get-BackupDest -OriginalPath $DestPath
     if ($DryRun) { Write-Log "[DRY-RUN] Backup: $DestPath -> $BackupPath"; return $true }
+    if ($Item.PSIsContainer) { Detach-ChildJunctions -RootDir $DestPath }
     Move-Item -LiteralPath $DestPath -Destination $BackupPath -Force
     Write-Log "Backed up: $DestPath -> $BackupPath"
     return $true
@@ -202,63 +207,46 @@ function ConvertTo-OrderedMap {
     return $Node
 }
 
-function Remove-DeslopHookEntries {
-    param($HooksMap)
+function Remove-LegacyHookEntries {
+    param([string]$Harness, [string]$ConfigDir)
+    $FileName = if ($Harness -eq "claude") { "settings.json" } else { "hooks.json" }
+    $HookPath = Join-Path $ConfigDir $FileName
+    $Raw = Read-TextSafe -FilePath $HookPath
+    if ([string]::IsNullOrWhiteSpace($Raw) -or $Raw -notmatch 'vcdeslop-hook') { return }
+    $Data = ConvertTo-OrderedMap ($Raw | ConvertFrom-Json)
+    if ($null -eq $Data["hooks"] -or $null -eq $Data["hooks"]["UserPromptSubmit"]) { return }
+    $HooksMap = $Data["hooks"]
     $Changed = $false
     $Launcher = '(?:powershell(?:\.exe)?\s+(?:-NoProfile\s+-ExecutionPolicy\s+Bypass\s+)?-File\s+)?'
     $ScriptName = 'vcdeslop-hook(?:\.ps1|\.cmd)?'
     $PathToken = "(?:`"(?:[^`"]*[/\\])?$ScriptName`"|'(?:[^']*[/\\])?$ScriptName'|(?:[^\s`"';&|]*[/\\])?$ScriptName)"
     $InstalledCommand = "^\s*$Launcher$PathToken\s+(?:claude|codex|dsh|cursor)\s*$"
     $Groups = foreach ($Group in $HooksMap["UserPromptSubmit"]) {
-        if ($Group -isnot [System.Collections.IDictionary] -or $Group["hooks"] -isnot [array]) {
-            $Group
-            continue
-        }
+        if ($Group -isnot [System.Collections.IDictionary] -or $Group["hooks"] -isnot [array]) { $Group; continue }
         $Remaining = @($Group["hooks"] | Where-Object {
             $_ -isnot [System.Collections.IDictionary] -or $_["command"] -notmatch $InstalledCommand
         })
-        if ($Remaining.Count -eq $Group["hooks"].Count) {
-            $Group
-            continue
-        }
+        if ($Remaining.Count -eq $Group["hooks"].Count) { $Group; continue }
         $Changed = $true
         if ($Remaining.Count -gt 0) {
             $Group["hooks"] = $Remaining
             $Group
         }
     }
-    if ($Changed) {
-        $HooksMap.Remove("UserPromptSubmit")
-        if ($null -ne $Groups) { $HooksMap["UserPromptSubmit"] = @($Groups) }
-    }
-    return $Changed
-}
-
-function Update-HookJson {
-    param([string]$Harness, [string]$ConfigDir)
-    $FileName = if ($Harness -eq "claude") { "settings.json" } else { "hooks.json" }
-    $HookPath = Join-Path $ConfigDir $FileName
-    $Raw = Read-TextSafe -FilePath $HookPath
-    $InstallHook = -not $Uninstall -and $Harness -ne "cursor"
-    if ($null -eq $Raw -or (-not $InstallHook -and [string]::IsNullOrWhiteSpace($Raw))) { return }
-    $Data = if ([string]::IsNullOrWhiteSpace($Raw)) { [ordered]@{} } else { ConvertTo-OrderedMap ($Raw | ConvertFrom-Json) }
-    if ($null -eq $Data["hooks"]) { $Data["hooks"] = [ordered]@{} }
-    $HooksMap = $Data["hooks"]
-    $Changed = Remove-DeslopHookEntries -HooksMap $HooksMap
-    if ($InstallHook) {
-        $Cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$HookScript`" $Harness"
-        $Group = [ordered]@{ matcher = ""; hooks = @([ordered]@{ type = "command"; command = $Cmd; timeout = 5 }) }
-        if ($null -eq $HooksMap["UserPromptSubmit"]) { $HooksMap["UserPromptSubmit"] = @() }
-        $HooksMap["UserPromptSubmit"] += $Group
-    } elseif (-not $Changed) {
-        return
-    }
+    if (-not $Changed) { return }
+    $HooksMap.Remove("UserPromptSubmit")
+    if ($null -ne $Groups) { $HooksMap["UserPromptSubmit"] = @($Groups) }
     if ($HooksMap.Count -eq 0) { $Data.Remove("hooks") }
     Write-TextWithBackup -FilePath $HookPath -Content (($Data | ConvertTo-Json -Depth 100) + "`n")
 }
 
-function Remove-RuleGateBlock {
-    param([string]$Harness, [string]$RulePath, [string]$Raw, [string]$MarkerRx)
+function Remove-LegacyRuleGate {
+    param([string]$Harness, [string]$ConfigDir)
+    $RuleMap = @{ claude = "CLAUDE.md"; codex = "AGENTS.md"; dsh = "AGENTS.md"; cursor = "rules\vcdeslop-gate.mdc" }
+    $RulePath = Join-Path $ConfigDir $RuleMap[$Harness]
+    $Raw = Read-TextSafe -FilePath $RulePath
+    if ([string]::IsNullOrWhiteSpace($Raw)) { return }
+    $MarkerRx = '(?s)\r?\n?<!-- VCDESLOP-AUTO-GATE:START -->.*?<!-- VCDESLOP-AUTO-GATE:END -->\r?\n?'
     if ($Raw -notmatch $MarkerRx) { return }
     $Cleaned = ([regex]::Replace($Raw, $MarkerRx, "`n")).Trim()
     if ($Harness -eq "cursor" -and $Cleaned.Replace("`r`n", "`n") -ceq $CursorRuleHeader) { $Cleaned = "" }
@@ -266,43 +254,17 @@ function Remove-RuleGateBlock {
     Write-TextWithBackup -FilePath $RulePath -Content ($Cleaned + "`n")
 }
 
-function Update-RuleGate {
-    param([string]$Harness, [string]$ConfigDir)
-    $RuleMap = @{ claude = "CLAUDE.md"; codex = "AGENTS.md"; dsh = "AGENTS.md"; cursor = "rules\vcdeslop-gate.mdc" }
-    $RulePath = Join-Path $ConfigDir $RuleMap[$Harness]
-    $Raw = Read-TextSafe -FilePath $RulePath
-    if ($null -eq $Raw) { return }
-    $MarkerRx = '(?s)\r?\n?<!-- VCDESLOP-AUTO-GATE:START -->.*?<!-- VCDESLOP-AUTO-GATE:END -->\r?\n?'
-    if ($Uninstall) { Remove-RuleGateBlock -Harness $Harness -RulePath $RulePath -Raw $Raw -MarkerRx $MarkerRx; return }
-    $Snippet = ([System.IO.File]::ReadAllText($RuleSnippetPath, [System.Text.Encoding]::UTF8)).Trim()
-    $Block = "<!-- VCDESLOP-AUTO-GATE:START -->`n$Snippet`n<!-- VCDESLOP-AUTO-GATE:END -->`n"
-    if ($Raw -match '<!-- VCDESLOP-AUTO-GATE:START -->') {
-        $Updated = ([regex]::Replace($Raw, $MarkerRx, "`n$Block")).TrimStart("`r", "`n")
-    } elseif ($Harness -eq "cursor" -and [string]::IsNullOrWhiteSpace($Raw)) {
-        $Updated = "$CursorRuleHeader`n`n$Block"
-    } else {
-        $Updated = if ([string]::IsNullOrWhiteSpace($Raw)) { $Block } else { $Raw.TrimEnd() + "`n`n" + $Block }
-    }
-    Write-TextWithBackup -FilePath $RulePath -Content $Updated
-}
-
 function Sync-AntigravityPlugin {
     $AgyDest = Join-Path $HomeDir ".gemini\config\plugins\vcdeslop"
     if ($Uninstall) { Remove-InstalledPath -DestPath $AgyDest; return }
     if (-not (Backup-ExistingTarget -DestPath $AgyDest)) { return }
-    $Pairs = @(
-        @("plugin.json", "plugin.json"),
-        @("hooks.json", "hooks.json"),
-        @("rules\AGENTS.md", "rules\AGENTS.md"),
-        @("adapters\antigravity\agents\vcdeslop-reviewer.md", "agents\vcdeslop-reviewer.md"),
-        @("adapters\hooks\vcdeslop-hook", "adapters\hooks\vcdeslop-hook"),
-        @("adapters\hooks\vcdeslop-hook.cmd", "adapters\hooks\vcdeslop-hook.cmd"),
-        @("adapters\hooks\vcdeslop-hook.ps1", "adapters\hooks\vcdeslop-hook.ps1")
-    )
-    foreach ($Pair in $Pairs) {
-        Sync-Entry -SourcePath (Join-Path $RepoRoot $Pair[0]) -DestPath (Join-Path $AgyDest $Pair[1])
-    }
-    Sync-Entry -SourcePath $SkillSrc -DestPath (Join-Path $AgyDest "skills\vcdeslop")
+    Sync-Entry -SourcePath (Join-Path $RepoRoot "plugin.json") -DestPath (Join-Path $AgyDest "plugin.json")
+    Sync-Entry -SourcePath $AgyAgentSrc -DestPath (Join-Path $AgyDest "agents\vcdeslop-reviewer.md")
+    # Antigravity on Windows skips NTFS junctions under plugins/*/skills/, so always copy the skill directory.
+    $SkillDest = Join-Path $AgyDest "skills\vcdeslop"
+    if ($DryRun) { Write-Log "[DRY-RUN] copy: $SkillDest -> $SkillSrc"; return }
+    Copy-CleanDirectory -SourceDir $SkillSrc -DestDir $SkillDest
+    Write-Log "Installed (copy): $SkillDest -> $SkillSrc"
 }
 
 foreach ($Target in (Resolve-TargetList -InputTargets $Targets)) {
@@ -317,14 +279,14 @@ foreach ($Target in (Resolve-TargetList -InputTargets $Targets)) {
             $Dir = Join-Path $HomeDir ".claude"
             Sync-Entry -SourcePath $SkillSrc -DestPath (Join-Path $Dir "skills\vcdeslop")
             Sync-Entry -SourcePath $ClaudeAgentSrc -DestPath (Join-Path $Dir "agents\vcdeslop-reviewer.md")
-            Update-HookJson -Harness "claude" -ConfigDir $Dir
-            Update-RuleGate -Harness "claude" -ConfigDir $Dir
+            Remove-LegacyHookEntries -Harness "claude" -ConfigDir $Dir
+            Remove-LegacyRuleGate -Harness "claude" -ConfigDir $Dir
         }
         { $_ -in @("codex", "dsh", "cursor") } {
             $Dir = Join-Path $HomeDir ".$Target"
             Sync-Entry -SourcePath $SkillSrc -DestPath (Join-Path $Dir "skills\vcdeslop")
-            Update-HookJson -Harness $Target -ConfigDir $Dir
-            Update-RuleGate -Harness $Target -ConfigDir $Dir
+            Remove-LegacyHookEntries -Harness $Target -ConfigDir $Dir
+            Remove-LegacyRuleGate -Harness $Target -ConfigDir $Dir
         }
         "antigravity" { Sync-AntigravityPlugin }
     }

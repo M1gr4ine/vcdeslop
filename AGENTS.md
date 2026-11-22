@@ -1,80 +1,55 @@
 # AGENTS.md — VCDeslop Maintenance Guide
 
-This file governs all human and AI maintenance inside the `vcdeslop` repository.
+This file governs maintenance inside the `vcdeslop` repository.
 
-## 1. Purpose & Architecture
+## 1. Purpose & Design Philosophy
 
-`vcdeslop` is a cross-agent code review and AI-slop cleanup plugin/skill compatible with **Claude Code**, **OpenAI Codex**, **DeepSeek Harness (`dsh`)**, **Google Antigravity (AGY)**, and **Cursor** (`agentskills.io` open standard).
+`vcdeslop` is a **pure built-in prompt repository for Review Agents** (with thin native agent presets and an optional opt-in skill).
+
+It intentionally contains **no programmatic scanners, no auto-trigger hooks, no always-on global coding rules, and no hard numeric quotas**. Let models code freely; apply senior engineering judgment at review time.
 
 ```text
 vcdeslop/
-├── AGENTS.md                        # This maintainer handbook (no YAML frontmatter, < 24 KB)
-├── CLAUDE.md                        # `@AGENTS.md` pointer for Claude Code
-├── plugin.json                      # Antigravity plugin manifest (strict schema)
-├── hooks.json                       # Antigravity plugin root PreInvocation hook
-├── .claude-plugin/plugin.json       # Claude Code plugin manifest
-├── rules/AGENTS.md                  # Always-on plugin rule (auto-triggers review gate)
-├── skills/vcdeslop/
-│   ├── SKILL.md                     # Core progressive-disclosure skill (< 200 lines)
-│   ├── references/
-│   │   ├── review-rubric.md         # Double-blind prompt, 5 dimensions, output schema
-│   │   ├── language-playbooks.md    # Java, JS/TS, SQL + Python, Go, Rust, Shell
-│   │   └── harness-adapters.md      # Same-model (`inherit`) subagent spawn rules
-│   └── scripts/
-│       ├── preflight_scan.py        # CLI entrypoint (zero external dependencies)
-│       └── analyzers/               # Modular DAG: models / lexers -> git_scope -> clones_slop / graph_boundaries (+ params)
+├── prompts/
+│   └── review-agent.md                      # Canonical standalone Review Agent system prompt
 ├── adapters/
-│   ├── hooks/                       # Native OS lifecycle hooks (`vcdeslop-hook.ps1`/`.cmd` & `vcdeslop-hook`)
-│   ├── claude/ & antigravity/       # Harness subagent presets
-│   └── rules/global-review-gate.md  # Idempotent global rule gate snippet
+│   ├── antigravity/agents/vcdeslop-reviewer.md  # Antigravity reviewer subagent (frontmatter + canonical prompt)
+│   └── claude/agents/vcdeslop-reviewer.md       # Claude Code reviewer subagent (frontmatter + canonical prompt)
+├── skills/vcdeslop/
+│   ├── SKILL.md                             # Ultra-lean opt-in dispatch skill
+│   └── references/
+│       ├── review-agent.md                  # Self-contained skill copy of prompts/review-agent.md
+│       └── language-tastes.md               # Optional non-dogmatic language smell notes
 ├── scripts/
-│   ├── install.ps1                  # Native Windows PowerShell installer/uninstaller (no Python)
-│   └── install.sh                   # Native POSIX/Bash installer/uninstaller (no Python)
-└── tests/verify_scanner.py          # Synthetic fixture suite, native hook/installer tests, & dogfooding gate
+│   ├── install.ps1                          # Optional Windows installer/uninstaller (agent & skill only)
+│   └── install.sh                           # Optional POSIX installer/uninstaller (agent & skill only)
+├── plugin.json                              # Antigravity plugin manifest (strict schema)
+├── .claude-plugin/plugin.json               # Claude Code plugin manifest
+└── tests/verify_repo.py                     # Manifest, prompt-sync, and installer smoke tests
 ```
 
-## 2. Non-Negotiable Invariants
+## 2. Invariants
 
-1. **Progressive Disclosure Budget (`skills/vcdeslop/SKILL.md`)**:
-   - Keep `SKILL.md` concise (`< 200` lines). Put detailed checklists, language examples, and harness syntax in `skills/vcdeslop/references/`.
-   - Keep `SKILL.md` frontmatter `description` under `900` characters (`agentskills.io` hard cap is `1024`) and include clear EN + ZH trigger phrases.
-   - Keep `AGENTS.md` and `rules/AGENTS.md` free of YAML frontmatter and under `24,000` bytes.
-2. **Strict Manifest Schemas**:
-   - Root `plugin.json` is parsed by Antigravity and MUST only use supported top-level keys (`name`, `displayName`, `version`, `description`, `author`, `suggestedPrompts` up to 3 items). Do not add unknown fields like `license`.
-   - `.claude-plugin/plugin.json` carries Claude Code manifest fields (`name`, `version`, `description`, `author`).
-3. **Equal-Intelligence & Double-Blind Subagent Rule**:
-   - Never modify `SKILL.md`, `rules/AGENTS.md`, `harness-adapters.md`, or `adapters/` to route reviews to weaker models (`haiku`, `flash`, `flash_lite`, `mini`, `Explore`).
-   - Always preserve **fresh isolated spawn** (`spawn`, never `fork`) with `model: inherit` (or omitted model override) so the reviewer inherits the parent session's full reasoning capacity without author confirmation bias.
-4. **Zero-Dependency Preflight Scanner (Opportunistic at Runtime)**:
-   - `skills/vcdeslop/scripts/` MUST use Python 3.10+ standard library only—no third-party pip dependencies—while installers (`scripts/install.ps1`, `scripts/install.sh`) and hooks (`adapters/hooks/`) MUST NOT require Python at all.
-5. **Dogfooding Self-Governance (Eat Our Own Dogfood)**:
-   - Every code file in this repository MUST pass `python skills/vcdeslop/scripts/preflight_scan.py --path . --mode all --gate strict` with **0 blockers and 0 warnings**:
-     - Positional parameters `<= 4` and **0 Boolean Trap parameters** (use `@dataclass(frozen=True)` options or Python `*` keyword-only booleans)
-     - Duplicate normalized code blocks `= 0`
-     - Module circular dependencies `= 0` and zero private cross-module imports
-   - Keep `skills/vcdeslop/scripts/analyzers/` strictly acyclic (DAG):
-     `models` / `lexers` <- `git_scope` <- `clones_slop` / `graph_boundaries` (and `models` / `lexers` <- `params`) <- `__init__`.
-   - Rule severities and remedies live in one catalog (`models.RULES`); build findings with `make_finding(...)` instead of repeating severity/remedy strings.
+1. **Single Prompt Body**: `prompts/review-agent.md` is the canonical source of truth. Keep `skills/vcdeslop/references/review-agent.md` and the markdown body of both `adapters/*/agents/vcdeslop-reviewer.md` files identical to it (`tests/verify_repo.py` enforces sync).
+2. **No Programmatic Enforcement or Global Hijacking**:
+   - Do not reintroduce preflight scanners, `hooks.json`, `adapters/hooks/`, `rules/AGENTS.md`, or always-on global rule-gate injections (`CLAUDE.md`/`AGENTS.md`/Cursor `.mdc`).
+   - Keep `scripts/install.ps1` and `scripts/install.sh` scoped to installing the optional review agent / skill, while keeping `-Uninstall` / `--uninstall` able to clean up legacy v2.x hooks and rule blocks safely.
+3. **Strict Manifest Schemas**:
+   - Root `plugin.json` is parsed by Antigravity and must only use supported top-level keys (`name`, `displayName`, `version`, `description`, `author`, `suggestedPrompts` up to 3 items).
+   - Keep `skills/vcdeslop/SKILL.md` concise (`< 100` lines) with `description` under `900` characters (`agentskills.io` cap is `1024`).
+   - Keep `AGENTS.md` free of YAML frontmatter and under `24,000` bytes.
+4. **Equal Intelligence for Review**: Keep `model: inherit` (or omit model downgrades) in reviewer agent presets and dispatch guidance so reviews never downgrade to weaker models.
 
-## 3. Extending Rules & Language Support
+## 3. Verification
 
-- **Adding a new parameter or Boolean-trap rule**: Language signature parsers (Python AST, brace languages, PowerShell) and finding translation live in `analyzers/params.py`. Keep language-specific patterns table-driven.
-- **Adding a new slop/SQL check**: Add a `_SlopSpec` entry in `skills/vcdeslop/scripts/analyzers/clones_slop.py` and document the refactor pattern in `skills/vcdeslop/references/language-playbooks.md`.
-- **Adding boundary rules**: Extend layer sets or import parsers in `skills/vcdeslop/scripts/analyzers/graph_boundaries.py`.
-- **Every new rule MUST include a positive violation fixture AND a false-positive exemption case** in `tests/verify_scanner.py`.
-
-## 4. Mandatory Verification Checklist
-
-Run these commands from the repository root before considering any change complete:
+Run from the repository root before committing:
 
 ```bash
-python -c "import json; [json.load(open(p, encoding='utf-8')) for p in ('plugin.json', '.claude-plugin/plugin.json', 'hooks.json')]; print('JSON OK')"
-python tests/verify_scanner.py
-python skills/vcdeslop/scripts/preflight_scan.py --path . --mode all --gate strict
+python tests/verify_repo.py
 ```
 
-Validate the native Windows installer without side effects:
+Validate Windows installer dry-run without side effects:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 all -Force -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 all -DryRun
 ```
